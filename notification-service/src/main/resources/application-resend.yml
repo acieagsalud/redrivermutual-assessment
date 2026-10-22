@@ -1,0 +1,16 @@
+# Activate with SPRING_PROFILES_ACTIVE=resend. Sends real email through Resend's free tier over SMTP.
+# RESEND_API_KEY comes from the git-ignored .env file and is never committed.
+spring:
+  mail:
+    host: smtp.resend.com
+    port: 465
+    username: resend
+    password: ${RESEND_API_KEY}
+    properties:
+      "[mail.smtp.auth]": true
+      "[mail.smtp.ssl.enable]": true
+
+notification:
+  mail:
+    # Without a verified domain Resend only accepts this sender, and only delivers to the account owner's address.
+    from: ${MAIL_FROM:Claims Team <onboarding@resend.dev>}

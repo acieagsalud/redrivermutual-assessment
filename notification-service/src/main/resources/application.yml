@@ -1,0 +1,65 @@
+spring:
+  application:
+    name: notification-service
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/notifications}
+    username: ${DB_USER}
+    password: ${DB_PASSWORD}
+  flyway:
+    enabled: true
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER}
+    password: ${RABBITMQ_PASSWORD}
+    listener:
+      simple:
+        prefetch: 10
+        # After the last retry the message is rejected, not requeued, so RabbitMQ dead-letters it.
+        default-requeue-rejected: false
+        retry:
+          enabled: true
+          max-retries: 3
+          initial-interval: 1s
+          multiplier: 2
+          max-interval: 4s
+  # Local default: Mailpit, no credentials. The "resend" profile overrides this block.
+  mail:
+    host: ${MAIL_HOST:localhost}
+    port: ${MAIL_PORT:1025}
+    properties:
+      "[mail.smtp.connectiontimeout]": 5000
+      "[mail.smtp.timeout]": 5000
+      "[mail.smtp.writetimeout]": 5000
+
+server:
+  port: ${PORT:8082}
+
+notification:
+  mail:
+    from: ${MAIL_FROM:Claims Team <claims@claimportal.local>}
+    message-id-domain: claimportal.local
+  queue:
+    exchange: claims.events
+    routing-key: claim.submitted
+    name: notification.claim-submitted
+    dead-letter-exchange: claims.events.dlx
+    dead-letter-queue: notification.claim-submitted.dlq
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  health:
+    # Mail health would open an SMTP connection on every probe (and count against Resend limits).
+    mail:
+      enabled: false
+
+logging:
+  pattern:
+    level: "%5p [%X{correlationId:-}]"

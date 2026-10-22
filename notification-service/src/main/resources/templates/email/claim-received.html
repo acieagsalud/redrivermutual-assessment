@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="${subject}">We've received your claim</title>
+</head>
+<body style="font-family: Arial, Helvetica, sans-serif; color: #1f2933; line-height: 1.5;">
+<p>Hi <span th:text="${firstName}">Dana</span>,</p>
+<p>Thank you for reporting your loss. We've received your home insurance claim.</p>
+<p style="font-size: 18px;">Your claim number is <strong th:text="${claimNumber}">CLM-7K4Q-9XHM</strong>.</p>
+<p>Please keep this number handy. An adjuster will contact you to discuss next steps.</p>
+<p>If you need to reach us before then, quote your claim number so we can find your file quickly.</p>
+<p>Claims Team</p>
+<hr>
+<p style="font-size: 12px; color: #616e7c;">This is an automated message. Please do not reply to this email.</p>
+</body>
+</html>
