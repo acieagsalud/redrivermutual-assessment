@@ -3,7 +3,7 @@ FROM maven:3.9-eclipse-temurin-21 AS build
 WORKDIR /src
 COPY pom.xml .
 COPY claims-api/pom.xml claims-api/
-COPY claims-api/pom.xml claims-api/
+COPY notification-service/pom.xml notification-service/
 RUN mvn -q -B -pl notification-service -am dependency:go-offline
 COPY notification-service/src notification-service/src
 # Tests run in CI and locally (they need Docker for Testcontainers), not inside the image build.
