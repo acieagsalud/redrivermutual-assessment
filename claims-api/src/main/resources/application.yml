@@ -1,0 +1,49 @@
+spring:
+  application:
+    name: claims-api
+  datasource:
+    # No defaults for credentials: they come from the environment (.env via docker compose).
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/claims}
+    username: ${DB_USER}
+    password: ${DB_PASSWORD}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER}
+    password: ${RABBITMQ_PASSWORD}
+    # Lets RabbitEventPublisher block until the broker has stored each message.
+    publisher-confirm-type: simple
+
+server:
+  port: ${PORT:8081}
+
+claims:
+  time-zone: America/Winnipeg
+  events:
+    exchange: claims.events
+    routing-key: claim.submitted
+    confirm-timeout: 5s
+  outbox:
+    batch-size: 50
+    poll-interval-ms: 1000
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+logging:
+  pattern:
+    # Correlation id on every line, so one claim can be traced across both services.
+    level: "%5p [%X{correlationId:-}]"

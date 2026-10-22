@@ -1,0 +1,20 @@
+CREATE TABLE claim (
+    id             UUID          PRIMARY KEY,
+    claim_number   VARCHAR(13)   NOT NULL,
+    status         VARCHAR(20)   NOT NULL,
+    first_name     VARCHAR(100)  NOT NULL,
+    last_name      VARCHAR(100)  NOT NULL,
+    email          VARCHAR(254)  NOT NULL,
+    phone          VARCHAR(20),
+    policy_number  VARCHAR(20)   NOT NULL,
+    loss_date      DATE          NOT NULL,
+    loss_type      VARCHAR(30)   NOT NULL,
+    address_line1  VARCHAR(200)  NOT NULL,
+    address_line2  VARCHAR(200),
+    city           VARCHAR(100)  NOT NULL,
+    province       VARCHAR(2)    NOT NULL,
+    postal_code    VARCHAR(7)    NOT NULL,
+    description    VARCHAR(2000) NOT NULL,
+    created_at     TIMESTAMPTZ   NOT NULL,
+    CONSTRAINT uk_claim_claim_number UNIQUE (claim_number)
+);

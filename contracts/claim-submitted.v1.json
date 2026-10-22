@@ -1,0 +1,9 @@
+{
+  "eventId": "3f6c2b1e-8d4a-4c1f-9b2e-5a7d0e9c1f42",
+  "eventType": "ClaimSubmitted",
+  "version": 1,
+  "occurredAt": "2026-10-22T18:30:00Z",
+  "claimNumber": "CLM-7K4Q-9XHM",
+  "customerFirstName": "Dana",
+  "customerEmail": "dana@example.com"
+}
