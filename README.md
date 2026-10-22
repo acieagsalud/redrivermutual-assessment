@@ -1,0 +1,303 @@
+# Home Insurance Claim Submission Portal
+
+A customer submits a home insurance claim online, gets a claim number straight away, and receives a confirmation email containing that number. The email is generated and sent by a separate service that consumes a `ClaimSubmitted` event from a message queue.
+
+| Part | Technology |
+| --- | --- |
+| Web app | React 19 + TypeScript (Vite), served by nginx |
+| Claims API | Java 21, Spring Boot 4.1, Spring Data JPA, Flyway |
+| Notification service | Java 21, Spring Boot 4.1, Spring AMQP, Spring Mail, Thymeleaf |
+| Messaging | RabbitMQ 3.13 |
+| Database | PostgreSQL 16 (one database per service) |
+| Email | Mailpit (local capture, default) or Resend free tier (real delivery) |
+| Tests | JUnit 5, Mockito, Testcontainers, Vitest, React Testing Library |
+
+---
+
+## Quick start
+
+**Prerequisites:** Docker with Docker Compose v2. Nothing else is needed to run the app.
+
+```bash
+cp .env.example .env          # local-only credentials; .env is git-ignored
+docker compose up --build
+```
+
+| Open | URL |
+| --- | --- |
+| Claim form | http://localhost:8080 |
+| Captured emails (Mailpit) | http://localhost:8025 |
+| RabbitMQ console | http://localhost:15672 (user and password from `.env`) |
+| Claims API health | http://localhost:8081/actuator/health |
+
+The first build downloads Maven and npm dependencies and takes a few minutes. Every service has a health check, and Compose starts each one only when its dependencies are healthy.
+
+### Sending real email with Resend (optional)
+
+Mailpit catches every email locally, so no account is needed. To deliver real email with duplicate protection:
+
+1. Create a free account at [resend.com](https://resend.com) and an API key with "Sending access".
+2. In `.env`, set `EMAIL_PROVIDER=resend` and `RESEND_API_KEY=<your key>`.
+3. `docker compose up -d notification-service`
+
+Without a verified domain, Resend only delivers to the email address on your Resend account, so use that address in the claim form. The free tier allows 100 emails a day.
+
+---
+
+## Demo walkthrough
+
+1. Open http://localhost:8080 and press **Submit claim** on the empty form. You'll see field-level errors and an error summary that receives focus.
+2. Fill the form in and submit. The confirmation page shows a claim number such as `CLM-7K4Q-9XHM`.
+3. Open Mailpit at http://localhost:8025. The confirmation email with the same claim number arrives within about a second.
+4. Trace one claim across both services by correlation id:
+   ```bash
+   docker compose logs claims-api notification-service | grep <correlation id from the response header>
+   ```
+5. **Resilience demo: the broker goes down.**
+   ```bash
+   docker compose stop rabbitmq
+   # submit another claim in the browser: it is still accepted (201)
+   docker compose start rabbitmq
+   # within seconds the outbox relay publishes it and the email arrives
+   ```
+
+Submitting with curl:
+
+```bash
+curl -i http://localhost:8080/api/v1/claims -H 'Content-Type: application/json' -d '{
+  "firstName": "Dana", "lastName": "Smith", "email": "dana@example.com", "phone": "204-555-0142",
+  "policyNumber": "HO-12345678", "lossDate": "2026-10-20", "lossType": "SEWER_BACKUP",
+  "address": {"line1": "123 Main St", "city": "Winnipeg", "province": "MB", "postalCode": "R3C 1A1"},
+  "description": "Basement flooded after heavy rain; carpet and drywall damaged."
+}'
+```
+
+The loss date must be within the past year.
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TD
+    B[Customer's browser<br/>React form] -->|POST /api/v1/claims| W[web: nginx<br/>static files + /api proxy]
+    W --> A[claims-api<br/>validate, claim number]
+    A -->|one transaction:<br/>claim + outbox_event| DB1[(PostgreSQL: claims)]
+    A -->|OutboxRelay every 1 s,<br/>waits for publisher confirm| MQ[RabbitMQ<br/>exchange claims.events]
+    MQ -->|queue notification.claim-submitted| N[notification-service<br/>dedupe, render, send]
+    N -->|processed_event| DB2[(PostgreSQL: notifications)]
+    N -->|SMTP + idempotency key| M[Mailpit or Resend]
+    MQ -.->|after 3 failed retries| DLQ[Dead-letter queue]
+```
+
+The customer's request ends when claims-api commits the claim and its outbox row together. Everything after that is asynchronous, and only notification-service sends email.
+
+### Components
+
+**claims-api** (`claims-api/`)
+
+| Layer | Classes | Responsibility |
+| --- | --- | --- |
+| web | `ClaimController`, `SubmitClaimRequest`, `GlobalExceptionHandler` | HTTP, Bean Validation, RFC 9457 problem-details errors |
+| application | `ClaimSubmissionService` | One transaction: claim number, save claim, write outbox row |
+| domain | `Claim`, `Address`, `ClaimNumberGenerator`, `RandomClaimNumberGenerator` | The claim and how it is numbered |
+| outbox | `OutboxWriter`, `OutboxRelay`, `OutboxPoller`, `EventPublisher`, `RabbitEventPublisher` | Transactional outbox and broker publishing |
+| observability | `CorrelationIdFilter` | Correlation id on every log line and response |
+
+**notification-service** (`notification-service/`)
+
+| Layer | Classes | Responsibility |
+| --- | --- | --- |
+| messaging | `ClaimSubmittedListener` | Broker message to service call; rejects unreadable messages |
+| application | `ClaimNotificationService` | Idempotency check, then compose and send |
+| email | `EmailComposer`, `EmailSender`, `SmtpEmailSender` | Thymeleaf rendering and SMTP delivery |
+| persistence | `ProcessedEventRepository` | `INSERT ... ON CONFLICT DO NOTHING` dedupe |
+| config | `RabbitTopologyConfig`, `RetryConfig` | Queue, DLQ, retry policy |
+
+**web** (`web/`): `ClaimForm`, `Confirmation`, `validation.ts` (mirrors the server rules), `api.ts` (maps server errors back onto fields).
+
+The interfaces `ClaimNumberGenerator`, `EventPublisher` and `EmailSender` are the seams for unit tests and for swapping infrastructure (for example SQS instead of RabbitMQ, or SES instead of SMTP) without touching business logic.
+
+### Data model
+
+| Database | Table | Purpose |
+| --- | --- | --- |
+| `claims` | `claim` | The submitted claim. `claim_number` has a unique constraint |
+| `claims` | `outbox_event` | Events waiting to be published. `published_at IS NULL` means unsent (partial index) |
+| `notifications` | `processed_event` | One row per emailed event. The primary key on `event_id` makes the consumer idempotent |
+
+Migrations live in each service's `src/main/resources/db/migration` and run on startup (Flyway). Each service has its own database user and cannot connect to the other's database.
+
+### Event contract
+
+`ClaimSubmitted` v1 is defined by [`contracts/claim-submitted.v1.json`](contracts/claim-submitted.v1.json). Each service owns its own Java type, and both test against the fixture. It carries only what the email needs (claim number, first name, email), so the address, policy number and damage description never travel over the broker.
+
+---
+
+## Key design decisions and trade-offs
+
+### 1. Transactional outbox (the main trade-off)
+
+**Problem:** saving the claim and publishing the event are writes to two systems that cannot commit together. If the save succeeds and the publish fails, the customer is told to expect an email that never comes.
+
+**Decision:** `ClaimSubmissionService` writes the claim and an `outbox_event` row in the **same database transaction**. `OutboxRelay` publishes unsent rows every second, waits for RabbitMQ's publisher confirm, then sets `published_at`. `OutboxWriter` uses `Propagation.MANDATORY`, so it fails fast if anyone calls it outside a transaction.
+
+**Alternatives considered:**
+
+- Publish after commit (`@TransactionalEventListener`): simpler, but a crash or broker outage loses the event silently.
+- Publish inside the transaction: worse, because it can announce a claim that then rolls back.
+- Change data capture (Debezium): the production-grade relay, but too much infrastructure for this scope.
+
+**Cost:** delivery is at-least-once (a crash after the confirm but before `published_at` is saved republishes the event), plus up to about 1 second of latency. The consumer handles duplicates, below.
+
+### 2. Preventing duplicate emails
+
+Exactly-once delivery across a database and a mail provider is not achievable, because SMTP cannot take part in a transaction. Two layers handle it:
+
+1. **Consumer idempotency.** `processed_event` is inserted with `ON CONFLICT DO NOTHING` in the same transaction as the send. A duplicate event finds the row and is skipped. If the send fails, the transaction rolls back and the broker redelivers.
+2. **Provider idempotency.** The one remaining gap is a crash after the provider accepted the email but before the commit. Every email carries `Resend-Idempotency-Key: <eventId>`, and Resend returns the original result for a repeated key within 24 hours instead of sending again. The email body is deterministic (no timestamps), as Resend requires. A stable `Message-ID` built from the event id is a final hint to mail clients.
+
+With Mailpit (local), layer 2 is not available, so that narrow crash window could produce a duplicate.
+
+### 3. Other decisions
+
+| Decision | Why | Trade-off |
+| --- | --- | --- |
+| RabbitMQ | Queue semantics, dead-lettering built in, first-class Spring support | No event replay like Kafka; not needed here |
+| Random claim number `CLM-XXXX-XXXX` (30-character alphabet without 0/O/1/I/L/U) | Not guessable, easy to read over the phone, about 6.5 x 10^11 combinations | Needs a uniqueness check; a collision triggers a retry (up to 3) |
+| Minimal event payload | Less personal information on the broker; consumer needs no callback to claims-api | Adding email content needs a contract change |
+| Separate database per service | Services stay independently deployable | Two databases to run (one Postgres container hosts both locally) |
+| Per-service event DTO plus shared JSON fixture | No shared jar coupling release cycles | Duplicate type definitions, kept honest by contract tests |
+| nginx proxies `/api` | One origin for the browser, so no CORS configuration | nginx config to maintain |
+| JPA entity doubles as domain model | Little behaviour to protect at this size | Would split as the claim lifecycle grows |
+
+---
+
+## Failure handling
+
+| Failure | What happens | Customer impact |
+| --- | --- | --- |
+| Invalid input | 400 problem details with an error per field; nothing saved | Fixes the highlighted fields |
+| Database down | 500 with a correlation id; nothing saved | Sees "try again" and a reference, never a false confirmation |
+| RabbitMQ down | Claim and outbox row saved; relay retries every second and records `attempts` and `last_error` | Confirmation shown; email arrives once the broker recovers |
+| Crash after publish, before `published_at` | Event republished | None: consumer skips the duplicate |
+| SMTP or Resend down | 3 retries with backoff (1 s, 2 s, 4 s), then dead-letter queue; event not marked processed | Email delayed until the DLQ message is replayed |
+| Unreadable message | Straight to the DLQ, no retries | Needs investigation |
+| Two copies of the same event at once | Second waits on the first's row lock, then skips | One email |
+
+---
+
+## Testing
+
+```bash
+mvn verify                 # all Java tests; needs Docker running for Testcontainers
+cd web && npm ci && npm test
+```
+
+| Suite | Count | Highlights |
+| --- | --- | --- |
+| claims-api | 32 | Claim and outbox commit or roll back together, against real PostgreSQL; relay publishes to real RabbitMQ with the event id as message id; validation and error shape; claim number format and collision retry |
+| notification-service | 19 | Same event delivered twice sends one email (real RabbitMQ, PostgreSQL and Mailpit); SMTP outage leads to DLQ without marking processed; malformed message goes to the DLQ unretried; HTML escaping; idempotency headers |
+| web | 24 | Field rules mirror the server; error summary and accessible descriptions; server errors mapped to fields; confirmation shows the claim number |
+
+The most important tests to discuss:
+
+1. `ClaimSubmissionIntegrationTest.claimIsRolledBackWhenTheOutboxInsertFails`: the database rejects the outbox row, and the claim row in the same transaction is rolled back. This is the outbox guarantee, proven against a real database without mocks.
+2. `NotificationIntegrationTest.theSameEventDeliveredTwiceSendsOnlyOneEmail`: idempotent consumer, end to end.
+3. `SmtpOutageIntegrationTest`: retries, dead-lettering, and no "processed" mark left behind, so a replay still sends.
+4. The two `ClaimSubmittedContractTest` classes: producer and consumer agree on the event shape.
+
+CI (`.github/workflows/ci.yml`) runs the backend tests, the frontend typecheck, tests and build, and builds all container images.
+
+---
+
+## Security
+
+- **Secrets:** no credentials in the repo. Compose reads them from a git-ignored `.env`, and the apps have no default passwords. The Resend API key is only ever an environment variable.
+- **Personal information:** logs contain claim numbers and event ids, never names, emails or addresses. The event payload carries only what the email needs.
+- **Input:** all rules are enforced server-side with length limits; the browser checks are only for convenience. nginx caps request bodies at 64 KB.
+- **Output:** Thymeleaf HTML-escapes customer input in the email (there is a test with `<script>`). The API never returns stack traces or exception messages.
+- **Log injection:** an incoming `X-Correlation-Id` is accepted only if it matches `[A-Za-z0-9-]{1,64}`.
+- **Headers:** nginx sets `Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options` and `Referrer-Policy`.
+- **Least privilege:** each service has its own database user and database. Containers run the JVM as a non-root user.
+
+---
+
+## Assumptions
+
+- **Anonymous submission.** There is no login, so anyone could file against any policy number (see production gaps).
+- **Policy number format** is assumed to be `HO-` followed by 8 digits. There is no policy system to verify against.
+- **Loss date** must be today or within the past year, using the Winnipeg calendar day.
+- **Canadian addresses only**, with postal code format checks. Not limited to Manitoba.
+- **Loss types** are a fixed list including Manitoba-relevant perils (sewer backup, overland flood, wind and hail).
+- **English only.**
+- **The confirmation page shows the claim number** as well as pointing to the email, in case the email is delayed.
+
+## Out of scope
+
+Authentication and customer accounts, policy verification, photo upload, anything after submission (adjuster assignment, status lookup, back office), broker notifications, French localization, paid email or cloud services, fraud checks.
+
+---
+
+## What is production-ready and what is not
+
+| Area | In this MVP | For production |
+| --- | --- | --- |
+| Reliability | Outbox, publisher confirms, idempotent consumer, retries, DLQ | DLQ alerting and a replay tool; outbox cleanup job |
+| Security | Validation, escaping, secrets in env, least-privilege DB users | Authentication or policy-holder verification, rate limiting and CAPTCHA, secrets manager, TLS everywhere |
+| Observability | Health checks, correlation ids across services | Metrics (outbox backlog, DLQ depth, send latency), tracing (OpenTelemetry), JSON logs to a central store, dashboards |
+| Scale | Relay uses `SKIP LOCKED`, so several API instances can run | Load testing; partition or CDC-based relay at high volume |
+| Data | Flyway migrations | Retention policy for claim PII, backups, encryption at rest |
+
+## With more time
+
+1. Verify the policy number against a policy system, and confirm the policy holder's identity (for example postal code plus last name).
+2. Photo and document upload to object storage with virus scanning.
+3. Claim status lookup page, which is where the non-guessable claim number pays off.
+4. DLQ replay endpoint and an alert on DLQ depth and outbox backlog.
+5. OpenTelemetry tracing through HTTP and AMQP headers.
+6. French translation.
+
+---
+
+## Project layout
+
+```
+claims-api/              Spring Boot service: submission, outbox, relay
+notification-service/    Spring Boot service: consumer, idempotency, email
+web/                     React + TypeScript app and nginx config
+contracts/               ClaimSubmitted event fixture shared by both services' tests
+infra/postgres/          Creates the two databases and users on first start
+docker-compose.yml       Full local stack
+.env.example             Template for local credentials (copy to .env)
+.github/workflows/       CI
+```
+
+## Running services outside Docker (development)
+
+```bash
+docker compose up -d postgres rabbitmq mailpit
+set -a; . ./.env; set +a
+DB_USER=claims DB_PASSWORD=$CLAIMS_DB_PASSWORD RABBITMQ_USER=$RABBITMQ_USER RABBITMQ_PASSWORD=$RABBITMQ_PASSWORD \
+  mvn -pl claims-api spring-boot:run
+DB_USER=notifications DB_PASSWORD=$NOTIFICATIONS_DB_PASSWORD RABBITMQ_USER=$RABBITMQ_USER RABBITMQ_PASSWORD=$RABBITMQ_PASSWORD \
+  mvn -pl notification-service spring-boot:run
+cd web && npm ci && npm run dev    # http://localhost:5173, proxies /api to :8081
+```
+
+For these commands, Postgres and RabbitMQ need their ports published: add `ports: ["5432:5432"]` and `["5672:5672"]` to those services in a local `docker-compose.override.yml`.
+
+---
+
+## Use of AI tools
+
+> **Draft for the author to review and edit before submission.**
+
+AI assistance (Claude, by Anthropic) was used throughout this project:
+
+- **Requirements and design:** breaking down the brief, listing ambiguities and assumptions, and discussing alternatives. Design decisions (transactional outbox, idempotent consumer, Resend idempotency keys, claim number scheme, technology choices) were made by me after reviewing the trade-offs.
+- **Implementation:** generating code and tests for the agreed design.
+- **Review and validation:** _[describe how you reviewed the code: for example reading every class, running the test suites, running the demo flows including the broker-outage scenario, and checking for secrets with `git log -p`]_.
+- **Security:** no secrets or personal credentials were shared with the AI tool or committed. _[add anything else you checked]_.
+
+I am accountable for the submitted solution and can explain every part of it.
