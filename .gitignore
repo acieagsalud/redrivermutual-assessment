@@ -1,0 +1,14 @@
+# Build output
+target/
+node_modules/
+dist/
+
+# Local secrets and environment: never commit
+.env
+*.local
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.DS_Store
