@@ -1,11 +1,11 @@
 /*
- * Visual language follows redrivermutual.com/claims: navy theme colour (#0e2a4d), the site's
- * grey scale, a grotesk sans for body text and Faustina (self-hosted, OFL) for headings.
+ * Visual language follows redrivermutual.com/claims: Red River Mutual red, the site's grey
+ * scale, a grotesk sans for body text and Faustina (self-hosted, OFL) for headings.
  * The site's own sans (Neue Haas Grotesk) is a licensed font, so we fall back to Helvetica/Arial.
  */
 :root {
-  --navy: #0e2a4d;
-  --navy-dark: #081a31;
+  --brand: #c8102e;
+  --brand-dark: #9e0b23;
   --ink: #231f20;
   --muted: #50525a;
   --line: #9fa1a7;
@@ -28,14 +28,14 @@ body { margin: 0; background: var(--bg); }
 #root { min-height: 100vh; display: flex; flex-direction: column; }
 #root > main { flex: 1 0 auto; width: 100%; }
 
-h1, h2, legend { font-family: var(--serif); font-weight: 600; color: var(--navy); }
+h1, h2, legend { font-family: var(--serif); font-weight: 600; color: var(--ink); }
 
 .visually-hidden {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
 
-.skip-link { position: absolute; left: 16px; top: -48px; background: #fff; color: var(--navy); padding: 8px 12px; z-index: 10; }
+.skip-link { position: absolute; left: 16px; top: -48px; background: #fff; color: var(--brand); padding: 8px 12px; z-index: 10; }
 .skip-link:focus { top: 8px; }
 
 /* Header: white bar with the wordmark, like the site's top navigation. */
@@ -44,11 +44,11 @@ h1, h2, legend { font-family: var(--serif); font-weight: 600; color: var(--navy)
   max-width: 1100px; margin: 0 auto; padding: 18px 16px;
   display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap;
 }
-.brand { font-family: var(--serif); font-size: 1.5rem; font-weight: 600; color: var(--navy); letter-spacing: 0.01em; }
+.brand { font-family: var(--serif); font-size: 1.5rem; font-weight: 600; color: var(--brand); letter-spacing: 0.01em; }
 .brand-tag { font-size: 0.85rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
 
 /* Navy page-title band, as on the site's interior pages. */
-.page-banner { background: var(--navy); color: #fff; }
+.page-banner { background: var(--brand); color: #fff; }
 .page-banner__inner { max-width: 1100px; margin: 0 auto; padding: 40px 16px; }
 .page-banner h1 { color: #fff; font-size: 2.5rem; line-height: 1.15; margin: 0; }
 
@@ -57,7 +57,7 @@ h1, h2, legend { font-family: var(--serif); font-weight: 600; color: var(--navy)
 .claim-form, .confirmation {
   background: var(--surface);
   padding: 32px;
-  border-top: 4px solid var(--navy);
+  border-top: 4px solid var(--brand);
 }
 
 .form-title { font-size: 1.9rem; margin: 0 0 12px; }
@@ -121,19 +121,19 @@ button {
   font: inherit; font-weight: 700; padding: 13px 28px; cursor: pointer;
   border-radius: 0; text-transform: uppercase; letter-spacing: 0.06em; font-size: 0.95rem;
 }
-button.primary { background: var(--navy); color: #fff; border: 2px solid var(--navy); margin-top: 28px; min-width: 200px; }
-button.primary:hover { background: var(--navy-dark); border-color: var(--navy-dark); }
+button.primary { background: var(--brand); color: #fff; border: 2px solid var(--brand); margin-top: 28px; min-width: 200px; }
+button.primary:hover { background: var(--brand-dark); border-color: var(--brand-dark); }
 button.primary:disabled { opacity: 0.7; cursor: progress; }
-button.secondary { background: #fff; color: var(--navy); border: 2px solid var(--navy); }
-button.secondary:hover { background: var(--navy); color: #fff; }
+button.secondary { background: #fff; color: var(--brand); border: 2px solid var(--brand); }
+button.secondary:hover { background: var(--brand); color: #fff; }
 
 .confirmation h2 { font-size: 1.9rem; margin: 0 0 8px; }
 .claim-number-label { margin: 20px 0 0; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.85rem; }
 .claim-number {
   display: inline-block; font-size: 2rem; font-weight: 700; letter-spacing: 0.06em; margin: 4px 0 20px;
-  padding: 8px 16px; background: var(--bg); color: var(--navy);
+  padding: 8px 16px; background: var(--bg); color: var(--ink);
   font-family: ui-monospace, Menlo, Consolas, monospace;
 }
 
-.site-footer { background: var(--navy); color: #d5dbe3; font-size: 0.85rem; }
+.site-footer { background: var(--ink); color: #d9d9d9; font-size: 0.85rem; }
 .site-footer__inner { max-width: 1100px; margin: 0 auto; padding: 24px 16px; }
