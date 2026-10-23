@@ -1,0 +1,94 @@
+:root {
+  --ink: #1f2933;
+  --muted: #52606d;
+  --line: #cbd2d9;
+  --bg: #f5f7fa;
+  --surface: #ffffff;
+  --brand: #1d4ed8;
+  --brand-dark: #1e3a8a;
+  --error: #b42318;
+  --error-bg: #fef3f2;
+  --focus: #f59e0b;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.5;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; }
+
+.site-header { background: var(--brand-dark); color: #fff; padding: 14px 16px; }
+.brand { font-weight: 700; letter-spacing: 0.02em; }
+
+.container { max-width: 720px; margin: 24px auto 64px; padding: 0 16px; }
+
+.claim-form, .confirmation {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 24px;
+}
+
+h1 { font-size: 1.75rem; margin: 0 0 8px; }
+.lead { color: var(--muted); margin-top: 0; }
+
+fieldset { border: 0; padding: 0; margin: 24px 0 0; }
+legend { font-size: 1.125rem; font-weight: 600; margin-bottom: 8px; }
+
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.row--three { grid-template-columns: 2fr 2fr 1fr; }
+@media (max-width: 600px) {
+  .row, .row--three { grid-template-columns: 1fr; gap: 0; }
+}
+
+.field { margin-bottom: 16px; }
+.field label { display: block; font-weight: 600; margin-bottom: 4px; }
+.optional { font-weight: 400; color: var(--muted); }
+.hint { margin: 0 0 6px; color: var(--muted); font-size: 0.9rem; }
+
+input, select, textarea {
+  width: 100%;
+  font: inherit;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+}
+textarea { resize: vertical; }
+
+input:focus, select:focus, textarea:focus, button:focus, a:focus, [tabindex='-1']:focus {
+  outline: 3px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.field--error input, .field--error select, .field--error textarea { border: 2px solid var(--error); }
+.error-message { color: var(--error); font-weight: 600; margin: 0 0 6px; font-size: 0.95rem; }
+
+.error-summary {
+  border: 3px solid var(--error);
+  background: var(--error-bg);
+  border-radius: 6px;
+  padding: 12px 16px;
+  margin: 16px 0;
+}
+.error-summary h2 { font-size: 1.1rem; margin: 0 0 4px; }
+.error-summary ul { margin: 0; padding-left: 20px; }
+.error-summary a { color: var(--error); }
+
+.banner { border-radius: 6px; padding: 12px 16px; margin: 16px 0; }
+.banner p { margin: 0; }
+.banner--error { background: var(--error-bg); border: 1px solid var(--error); color: var(--error); }
+.reference { font-size: 0.85rem; margin-top: 4px !important; }
+
+.counter { text-align: right; color: var(--muted); font-size: 0.85rem; margin: -8px 0 0; }
+
+button { font: inherit; border-radius: 6px; padding: 12px 20px; cursor: pointer; }
+button.primary { background: var(--brand); color: #fff; border: 0; font-weight: 600; margin-top: 24px; min-width: 180px; }
+button.primary:hover { background: var(--brand-dark); }
+button.primary:disabled { opacity: 0.7; cursor: progress; }
+button.secondary { background: #fff; color: var(--brand); border: 1px solid var(--brand); }
+
+.claim-number-label { margin: 16px 0 0; color: var(--muted); }
+.claim-number { font-size: 2rem; font-weight: 700; letter-spacing: 0.06em; margin: 0 0 16px; font-family: ui-monospace, Menlo, Consolas, monospace; }
