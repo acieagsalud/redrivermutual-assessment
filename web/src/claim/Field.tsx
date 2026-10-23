@@ -6,7 +6,7 @@ type FieldProps = {
   hint?: string
   error?: string
   optional?: boolean
-  children: (aria: { id: string; 'aria-invalid': boolean; 'aria-describedby'?: string }) => ReactNode
+  children: (aria: { id: string; 'aria-invalid': boolean; 'aria-required': boolean; 'aria-describedby'?: string }) => ReactNode
 }
 
 /** Label, hint and error wired to the control with ids so screen readers announce them together. */
@@ -19,7 +19,12 @@ export function Field({ id, label, hint, error, optional, children }: FieldProps
     <div className={`field${error ? ' field--error' : ''}`}>
       <label htmlFor={id}>
         {label}
-        {optional && <span className="optional"> (optional)</span>}
+        {/* Visual marker only: the control itself carries aria-required. */}
+        {!optional && (
+          <span className="required" aria-hidden="true">
+            *
+          </span>
+        )}
       </label>
       {hint && (
         <p id={hintId} className="hint">
@@ -31,7 +36,7 @@ export function Field({ id, label, hint, error, optional, children }: FieldProps
           {error}
         </p>
       )}
-      {children({ id, 'aria-invalid': Boolean(error), 'aria-describedby': describedBy })}
+      {children({ id, 'aria-invalid': Boolean(error), 'aria-required': !optional, 'aria-describedby': describedBy })}
     </div>
   )
 }
