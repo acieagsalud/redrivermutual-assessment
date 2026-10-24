@@ -1,0 +1,85 @@
+# Render Blueprint for a free cloud demo. Lives only on the deploy/render branch.
+# Postgres comes from Neon and RabbitMQ from CloudAMQP (both free); see docs/deploy-render.md.
+# Values marked sync: false are secrets you paste into the Render dashboard; none are committed.
+
+services:
+  - type: web
+    name: rrm-claims-api
+    runtime: docker
+    plan: free
+    branch: deploy/render
+    dockerContext: .
+    dockerfilePath: ./claims-api/Dockerfile
+    healthCheckPath: /actuator/health/readiness
+    envVars:
+      - key: PORT
+        value: "8081"
+      - key: JAVA_OPTS
+        value: "-XX:MaxRAMPercentage=55 -XX:+UseSerialGC"
+      - key: DB_URL
+        sync: false # jdbc:postgresql://<neon host>/claims?sslmode=require
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: RABBITMQ_HOST
+        sync: false # <cloudamqp host>, e.g. puffin.rmq2.cloudamqp.com
+      - key: RABBITMQ_PORT
+        value: "5671"
+      - key: SPRING_RABBITMQ_SSL_ENABLED
+        value: "true"
+      - key: SPRING_RABBITMQ_VIRTUAL_HOST
+        sync: false # on CloudAMQP the vhost equals the user name
+      - key: RABBITMQ_USER
+        sync: false
+      - key: RABBITMQ_PASSWORD
+        sync: false
+
+  - type: web
+    name: rrm-notification-service
+    runtime: docker
+    plan: free
+    branch: deploy/render
+    dockerContext: .
+    dockerfilePath: ./notification-service/Dockerfile
+    healthCheckPath: /actuator/health/readiness
+    envVars:
+      - key: PORT
+        value: "8082"
+      - key: JAVA_OPTS
+        value: "-XX:MaxRAMPercentage=55 -XX:+UseSerialGC"
+      - key: SPRING_PROFILES_ACTIVE
+        value: resend
+      - key: RESEND_API_KEY
+        sync: false
+      - key: DB_URL
+        sync: false # jdbc:postgresql://<neon host>/notifications?sslmode=require
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: RABBITMQ_HOST
+        sync: false
+      - key: RABBITMQ_PORT
+        value: "5671"
+      - key: SPRING_RABBITMQ_SSL_ENABLED
+        value: "true"
+      - key: SPRING_RABBITMQ_VIRTUAL_HOST
+        sync: false
+      - key: RABBITMQ_USER
+        sync: false
+      - key: RABBITMQ_PASSWORD
+        sync: false
+
+  - type: web
+    name: rrm-claim-portal
+    runtime: docker
+    plan: free
+    branch: deploy/render
+    dockerContext: ./web
+    dockerfilePath: ./web/Dockerfile
+    envVars:
+      - key: PORT
+        value: "80"
+      - key: CLAIMS_API_URL
+        sync: false # the claims-api's URL from its Render page, e.g. https://rrm-claims-api.onrender.com

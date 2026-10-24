@@ -100,6 +100,8 @@ services:
 
   web:
     build: ./web
+    environment:
+      CLAIMS_API_URL: http://claims-api:8081
     ports:
       - "8080:80"
     depends_on:
