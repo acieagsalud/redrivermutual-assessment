@@ -318,7 +318,7 @@ I made the design decisions after reviewing the trade-offs, and changed directio
 - **Manual run-through:** I ran the full stack locally with Docker Compose and submitted claims through the form. I confirmed the confirmation emails in Mailpit, and that Resend accepted the real send, as shown in the Resend dashboard.
 - **Broker outage:** the full stack was also exercised with RabbitMQ stopped. The claim still saved, and its email went out once the broker came back.
 - **Defects caught:** the checks caught real problems in the generated code before merge. One was a Hibernate column-type mismatch (`CHAR` vs `VARCHAR`). Another was a Dockerfile that copied the wrong Maven module. A third was a test approach that fought the transaction boundary, which was replaced by a real database-level failure.
-- **Code review:** I reviewed the changes in pull requests before merging them. _[Confirm or adjust: which parts you read closely, e.g. the outbox relay, the consumer's idempotency and retry/DLQ setup, and the claim number generator.]_
+- **Code review:** I reviewed the changes in pull requests before merging them. I reviewed codebase to check that implementation matched planned design and ensured that no sensitive data (ie. api keys/creds) was committed.
 
 ### Security and privacy
 
