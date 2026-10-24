@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -53,7 +54,8 @@ public class ClaimSubmissionService {
                 return existing.get();
             }
         }
-        Instant now = clock.instant();
+        // PostgreSQL stores microseconds; truncating keeps a replayed response identical to the first one.
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
         Claim claim = Claim.builder()
                 .id(UUID.randomUUID())
                 .claimNumber(unusedClaimNumber())
