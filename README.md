@@ -142,9 +142,9 @@ The interfaces `ClaimNumberGenerator`, `EventPublisher` and `EmailSender` are th
 
 | Database | Table | Purpose |
 | --- | --- | --- |
-| `claims` | `claim` | The submitted claim. `claim_number` has a unique constraint |
-| `claims` | `outbox_event` | Events waiting to be published. `published_at IS NULL` means unsent (partial index) |
-| `notifications` | `processed_event` | One row per emailed event. The primary key on `event_id` makes the consumer idempotent |
+| `claims` | `claim` | The submitted claim. `claim_number` and the optional `idempotency_key` have unique constraints |
+| `claims` | `outbox_event` | Events waiting to be published. `published_at IS NULL` means unsent (partial index). Published rows are deleted after 7 days |
+| `notifications` | `processed_event` | One row per emailed event. The primary key on `event_id` makes the consumer idempotent. Rows are deleted after 30 days, well past any redelivery |
 
 Migrations live in each service's `src/main/resources/db/migration` and run on startup (Flyway). Each service has its own database user and cannot connect to the other's database.
 
@@ -178,6 +178,8 @@ Exactly-once delivery across a database and a mail provider is not achievable, b
 2. **Provider idempotency.** The one remaining gap is a crash after the provider accepted the email but before the commit. Every email carries `Resend-Idempotency-Key: <eventId>`, and Resend returns the original result for a repeated key within 24 hours instead of sending again. The email body is deterministic (no timestamps), as Resend requires. A stable `Message-ID` built from the event id is a final hint to mail clients.
 
 With Mailpit (local), layer 2 is not available, so that narrow crash window could produce a duplicate.
+
+The same thinking applies one step earlier, to the customer's request. If the network drops after the claim is saved but before the browser gets the response, the customer sees an error and presses Submit again. The form therefore sends an `Idempotency-Key` header, one random UUID per claim being reported, reused on every retry. A repeated key returns the original claim with the same 201 body, so there is no second claim and no second email. Two concurrent requests with the same key are settled by the unique index: the loser catches the violation and returns the winner's claim. The header is optional, so other API clients still work without it.
 
 ### 3. Other decisions
 
@@ -221,9 +223,9 @@ cd e2e && npm ci && npx playwright install chromium && npx playwright test
 
 | Suite | Count | Highlights |
 | --- | --- | --- |
-| claims-api | 34 | Claim and outbox commit or roll back together, against real PostgreSQL; relay publishes to real RabbitMQ with the event id as message id; validation and error shape; claim number format and collision retry |
-| notification-service | 19 | Same event delivered twice sends one email (real RabbitMQ, PostgreSQL and Mailpit); SMTP outage leads to DLQ without marking processed; malformed message goes to the DLQ unretried; HTML escaping; idempotency headers |
-| web | 25 | Field rules mirror the server; error summary and accessible descriptions; required fields announced to screen readers; server errors mapped to fields; confirmation shows the claim number |
+| claims-api | 45 | Claim and outbox commit or roll back together, against real PostgreSQL; relay publishes to real RabbitMQ with the event id as message id; batched publish and backlog draining; a retried submission with the same idempotency key creates one claim and one event; validation and error shape; claim number format and collision retry; outbox cleanup |
+| notification-service | 20 | Same event delivered twice sends one email (real RabbitMQ, PostgreSQL and Mailpit); SMTP outage leads to DLQ without marking processed; malformed message goes to the DLQ unretried; HTML escaping; idempotency headers; processed-event cleanup |
+| web | 26 | Field rules mirror the server; error summary and accessible descriptions; required fields announced to screen readers; server errors mapped to fields; confirmation shows the claim number; a retry reuses the idempotency key |
 | e2e (Playwright) | 6 | Real browser against the full Compose stack: submit the form, see the claim number, and find exactly one email with that number in Mailpit; incomplete form stopped in the browser; API rejects invalid data on its own; Prometheus scrapes both services, every Grafana panel query returns data, and the dashboard is provisioned |
 
 The most important tests to discuss:
@@ -285,10 +287,10 @@ Authentication and customer accounts, policy verification, photo upload, anythin
 
 | Area | In this MVP | For production |
 | --- | --- | --- |
-| Reliability | Outbox, publisher confirms, idempotent consumer, retries, DLQ | DLQ alerting and a replay tool; outbox cleanup job |
+| Reliability | Outbox, publisher confirms, idempotent consumer, idempotent submission, retries, DLQ, cleanup of old outbox and processed-event rows | DLQ alerting and a replay tool |
 | Security | Validation, escaping, secrets in env, least-privilege DB users | Authentication or policy-holder verification, rate limiting and CAPTCHA, secrets manager, TLS everywhere |
 | Observability | Health checks, correlation ids across services, Prometheus metrics with a Grafana dashboard (below) | Alerting rules and on-call routing, DLQ depth from RabbitMQ, tracing (OpenTelemetry), JSON logs to a central store |
-| Scale | Relay uses `SKIP LOCKED`, so several API instances can run | Load testing; partition or CDC-based relay at high volume |
+| Scale | Stateless API; relay uses `SKIP LOCKED` so several instances share the outbox, publishes each batch with one broker confirm and keeps draining while batches come back full; 4 to 8 concurrent consumers per notification instance (`LISTENER_CONCURRENCY`) | Load testing; quorum queues and a RabbitMQ cluster; database read replicas and connection pooling (PgBouncer); partition or CDC-based relay at very high volume; a paid email plan (Resend's free tier caps daily volume) |
 | Data | Flyway migrations | Retention policy for claim PII, backups, encryption at rest |
 
 ## With more time

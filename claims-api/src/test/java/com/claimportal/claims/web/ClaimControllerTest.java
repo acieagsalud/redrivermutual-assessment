@@ -15,6 +15,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -22,12 +23,15 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.containsString;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -66,7 +70,7 @@ class ClaimControllerTest {
     void validSubmissionReturns201WithClaimNumber() throws Exception {
         // The registry is shared by every test in this cached context, so measure the change.
         double submittedBefore = meters.counter("claims.submitted").count();
-        when(service.submit(any())).thenReturn(
+        when(service.submit(any(), any())).thenReturn(
                 new SubmittedClaim("CLM-7K4Q-9XHM", ClaimStatus.SUBMITTED, Instant.parse("2026-10-22T18:30:00Z")));
 
         mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(TestClaims.validRequestJson(yesterday)))
@@ -80,7 +84,7 @@ class ClaimControllerTest {
 
     @Test
     void blankOptionalFieldsAreStoredAsNullAndTextIsTrimmed() throws Exception {
-        when(service.submit(any())).thenReturn(new SubmittedClaim("CLM-7K4Q-9XHM", ClaimStatus.SUBMITTED, Instant.now()));
+        when(service.submit(any(), any())).thenReturn(new SubmittedClaim("CLM-7K4Q-9XHM", ClaimStatus.SUBMITTED, Instant.now()));
         String body = TestClaims.validRequestJson(yesterday)
                 .replace("\"phone\": \"204-555-0142\"", "\"phone\": \"\"")
                 .replace("\"firstName\": \"Dana\"", "\"firstName\": \"  Dana  \"");
@@ -88,7 +92,7 @@ class ClaimControllerTest {
         mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isCreated());
 
         ArgumentCaptor<NewClaim> captor = ArgumentCaptor.forClass(NewClaim.class);
-        verify(service).submit(captor.capture());
+        verify(service).submit(captor.capture(), isNull());
         assertThat(captor.getValue().phone()).isNull();
         assertThat(captor.getValue().address().getLine2()).isNull();
         assertThat(captor.getValue().firstName()).isEqualTo("Dana");
@@ -109,7 +113,7 @@ class ClaimControllerTest {
                 .andExpect(jsonPath("$.errors[0].field").value("address.postalCode"))
                 .andExpect(jsonPath("$.errors[1].field").value("email"))
                 .andExpect(jsonPath("$.errors[2].field").value("policyNumber"));
-        verify(service, never()).submit(any());
+        verify(service, never()).submit(any(), any());
     }
 
     @Test
@@ -132,7 +136,7 @@ class ClaimControllerTest {
 
     @Test
     void unexpectedErrorsReturn500WithoutLeakingInternals() throws Exception {
-        when(service.submit(any())).thenThrow(new IllegalStateException("db password is hunter2"));
+        when(service.submit(any(), any())).thenThrow(new IllegalStateException("db password is hunter2"));
 
         mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(TestClaims.validRequestJson(yesterday)))
                 .andExpect(status().isInternalServerError())
@@ -144,7 +148,7 @@ class ClaimControllerTest {
     @Test
     void rejectedAndFailedSubmissionsAreNotCounted() throws Exception {
         double submittedBefore = meters.counter("claims.submitted").count();
-        when(service.submit(any())).thenThrow(new IllegalStateException("transaction rolled back"));
+        when(service.submit(any(), any())).thenThrow(new IllegalStateException("transaction rolled back"));
 
         mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(TestClaims.validRequestJson(yesterday)))
                 .andExpect(status().isInternalServerError());
@@ -156,7 +160,7 @@ class ClaimControllerTest {
 
     @Test
     void echoesASafeCorrelationIdAndReplacesAnUnsafeOne() throws Exception {
-        when(service.submit(any())).thenReturn(new SubmittedClaim("CLM-7K4Q-9XHM", ClaimStatus.SUBMITTED, Instant.now()));
+        when(service.submit(any(), any())).thenReturn(new SubmittedClaim("CLM-7K4Q-9XHM", ClaimStatus.SUBMITTED, Instant.now()));
 
         mvc.perform(post(URL).header("X-Correlation-Id", "abc-123")
                         .contentType(MediaType.APPLICATION_JSON).content(TestClaims.validRequestJson(yesterday)))
@@ -165,5 +169,41 @@ class ClaimControllerTest {
         mvc.perform(post(URL).header("X-Correlation-Id", "bad\nINFO forged log line")
                         .contentType(MediaType.APPLICATION_JSON).content(TestClaims.validRequestJson(yesterday)))
                 .andExpect(header().string("X-Correlation-Id", not(containsString("forged"))));
+    }
+
+    @Test
+    void passesTheIdempotencyKeyThroughAndDoesNotCountAReplay() throws Exception {
+        double submittedBefore = meters.counter("claims.submitted").count();
+        when(service.submit(any(), eq("3f2b9c1e-key"))).thenReturn(
+                new SubmittedClaim("CLM-7K4Q-9XHM", ClaimStatus.SUBMITTED, Instant.parse("2026-10-22T18:30:00Z"), true));
+
+        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).header("Idempotency-Key", "3f2b9c1e-key")
+                        .content(TestClaims.validRequestJson(yesterday)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.claimNumber").value("CLM-7K4Q-9XHM"));
+
+        assertThat(meters.counter("claims.submitted").count()).isEqualTo(submittedBefore);
+    }
+
+    @Test
+    void aMalformedIdempotencyKeyIsRejected() throws Exception {
+        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).header("Idempotency-Key", "not a valid key!")
+                        .content(TestClaims.validRequestJson(yesterday)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.title").value("Invalid Idempotency-Key"));
+
+        verify(service, never()).submit(any(), any());
+    }
+
+    @Test
+    void aConcurrentRequestWithTheSameKeyGetsTheClaimThatWon() throws Exception {
+        when(service.submit(any(), eq("key-1"))).thenThrow(new DataIntegrityViolationException("uk_claim_idempotency_key"));
+        when(service.findExisting("key-1")).thenReturn(Optional.of(
+                new SubmittedClaim("CLM-WINN-ER00", ClaimStatus.SUBMITTED, Instant.parse("2026-10-22T18:30:00Z"), true)));
+
+        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).header("Idempotency-Key", "key-1")
+                        .content(TestClaims.validRequestJson(yesterday)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.claimNumber").value("CLM-WINN-ER00"));
     }
 }

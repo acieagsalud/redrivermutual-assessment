@@ -83,4 +83,22 @@ describe('claim submission', () => {
     expect(screen.getByText('Reference: abc-123')).toBeInTheDocument()
     expect(screen.queryByTestId('claim-number')).not.toBeInTheDocument()
   })
+
+  it('retries with the same idempotency key so a lost response cannot create a second claim', async () => {
+    const user = userEvent.setup()
+    const submit = vi.fn<(values: unknown, key: string) => Promise<SubmitResult>>()
+      .mockResolvedValueOnce({ kind: 'failed', message: 'We could not submit your claim right now. Please try again in a few minutes.' })
+      .mockResolvedValueOnce({ kind: 'accepted', claimNumber: 'CLM-7K4Q-9XHM' })
+    render(<App submit={submit} />)
+
+    await fillValidForm(user)
+    await user.click(screen.getByRole('button', { name: 'Submit Claim' }))
+    await screen.findByText(/try again in a few minutes/)
+    await user.click(screen.getByRole('button', { name: 'Submit Claim' }))
+
+    await screen.findByTestId('claim-number')
+    const [first, second] = submit.mock.calls.map(([, key]) => key)
+    expect(first).toMatch(/^[0-9a-f-]{36}$/)
+    expect(second).toBe(first)
+  })
 })

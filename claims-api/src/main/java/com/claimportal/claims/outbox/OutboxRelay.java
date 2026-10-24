@@ -48,28 +48,33 @@ public class OutboxRelay {
                 .register(meterRegistry);
     }
 
-    /** Publishes one batch and returns how many events were confirmed by the broker. */
+    /**
+     * Publishes one batch and returns how many events the broker confirmed: the whole batch or none.
+     * If the confirm fails, some messages may still have reached the broker; they are sent again on
+     * the next run and the consumer skips the copies.
+     */
     @Transactional
     public int publishPending() {
         List<OutboxEvent> batch = repository.lockUnpublished(properties.batchSize());
-        int count = 0;
-        for (OutboxEvent event : batch) {
-            try {
-                publisher.publish(event);
-                event.markPublished(clock.instant());
-                published.increment();
-                count++;
-            } catch (RuntimeException e) {
-                event.recordFailure(e.getMessage());
-                publishFailures.increment();
-                log.warn("Outbox publish failed eventId={} attempts={}: {}", event.getId(), event.getAttempts(), e.getMessage());
-                // The broker is most likely unavailable; stop and let the next poll retry the rest.
-                break;
-            }
+        if (batch.isEmpty()) {
+            return 0;
         }
-        if (count > 0) {
-            log.debug("Outbox relayed {} event(s)", count);
+        try {
+            publisher.publish(batch);
+        } catch (RuntimeException e) {
+            batch.forEach(event -> event.recordFailure(e.getMessage()));
+            publishFailures.increment(batch.size());
+            log.warn("Outbox publish failed for {} event(s), first eventId={}: {}", batch.size(), batch.getFirst().getId(), e.getMessage());
+            return 0;
         }
-        return count;
+        batch.forEach(event -> event.markPublished(clock.instant()));
+        published.increment(batch.size());
+        log.debug("Outbox relayed {} event(s)", batch.size());
+        return batch.size();
+    }
+
+    /** True when the last batch was full, so more events are probably waiting. */
+    public boolean wasFullBatch(int published) {
+        return published == properties.batchSize();
     }
 }

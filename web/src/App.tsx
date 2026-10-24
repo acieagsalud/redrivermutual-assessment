@@ -4,7 +4,7 @@ import { Confirmation } from './claim/Confirmation'
 import type { SubmitResult } from './claim/api'
 import type { ClaimFormValues } from './claim/types'
 
-type Props = { submit?: (values: ClaimFormValues) => Promise<SubmitResult> }
+type Props = { submit?: (values: ClaimFormValues, idempotencyKey: string) => Promise<SubmitResult> }
 
 export function App({ submit }: Props) {
   const [accepted, setAccepted] = useState<{ claimNumber: string; email: string } | null>(null)

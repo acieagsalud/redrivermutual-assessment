@@ -28,12 +28,21 @@ function toRequestBody(v: ClaimFormValues) {
   }
 }
 
-export async function submitClaim(values: ClaimFormValues, fetchImpl: typeof fetch = fetch): Promise<SubmitResult> {
+/**
+ * The idempotency key identifies one attempt to report a claim. Send the same key when retrying
+ * after a failure: if the first request did reach the server, the retry returns that claim
+ * instead of creating a second one.
+ */
+export async function submitClaim(
+  values: ClaimFormValues,
+  idempotencyKey: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<SubmitResult> {
   let response: Response
   try {
     response = await fetchImpl('/api/v1/claims', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'Idempotency-Key': idempotencyKey },
       body: JSON.stringify(toRequestBody(values)),
     })
   } catch {

@@ -146,6 +146,22 @@ class ClaimSubmissionIntegrationTest {
     }
 
     @Test
+    void aRetriedSubmissionWithTheSameKeyCreatesOneClaimAndOneEvent() throws Exception {
+        String first = mvc.perform(post("/api/v1/claims").contentType(MediaType.APPLICATION_JSON)
+                        .header("Idempotency-Key", "retry-test-key").content(TestClaims.validRequestJson(yesterday)))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        String second = mvc.perform(post("/api/v1/claims").contentType(MediaType.APPLICATION_JSON)
+                        .header("Idempotency-Key", "retry-test-key").content(TestClaims.validRequestJson(yesterday)))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(second).as("the retry gets the same response").isEqualTo(first);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM claim", Integer.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM outbox_event", Integer.class)).isEqualTo(1);
+    }
+
+    @Test
     void outboxWriterRefusesToRunOutsideATransaction() {
         assertThatThrownBy(() -> outboxWriter.append(UUID.randomUUID(), null))
                 .isInstanceOf(IllegalTransactionStateException.class);

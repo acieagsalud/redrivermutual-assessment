@@ -29,4 +29,12 @@ public class ProcessedEventRepository {
                 eventId, claimNumber, Timestamp.from(at));
         return inserted == 1;
     }
+
+    /**
+     * Forgets events processed before the cutoff. The retention must be longer than any realistic
+     * redelivery window, since a forgotten event would be emailed again if it were redelivered.
+     */
+    public int deleteProcessedBefore(Instant cutoff) {
+        return jdbc.update("DELETE FROM processed_event WHERE processed_at < ?", Timestamp.from(cutoff));
+    }
 }

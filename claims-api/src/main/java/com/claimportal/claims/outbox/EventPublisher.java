@@ -1,7 +1,12 @@
 package com.claimportal.claims.outbox;
 
-/** Sends an outbox event to the message broker. Returns only once the broker has confirmed it. */
+import java.util.List;
+
+/**
+ * Sends outbox events to the message broker. Returns only once the broker has confirmed all of them;
+ * throws if any one is not confirmed, in which case none should be treated as sent.
+ */
 public interface EventPublisher {
 
-    void publish(OutboxEvent event);
+    void publish(List<OutboxEvent> events);
 }
