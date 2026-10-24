@@ -39,6 +39,8 @@ class OutboxRelayTest {
         assertThat(event.isPublished()).isTrue();
         assertThat(event.getPublishedAt()).isEqualTo(NOW);
         assertThat(event.getAttempts()).isEqualTo(1);
+        assertThat(meters.counter("outbox.published").count()).isEqualTo(1);
+        assertThat(meters.counter("outbox.publish.failures").count()).isZero();
     }
 
     @Test

@@ -1,0 +1,16 @@
+# Scrapes both services' /actuator/prometheus endpoints over the Compose network.
+# A short interval suits the local demo; production would typically use 15-30s.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: claims-api
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["claims-api:8081"]
+
+  - job_name: notification-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["notification-service:8082"]
