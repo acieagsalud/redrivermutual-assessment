@@ -15,4 +15,6 @@ USER app
 WORKDIR /app
 COPY --from=build /src/notification-service/target/notification-service-*.jar app.jar
 EXPOSE 8082
-ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "app.jar"]
+# JAVA_OPTS lets a small host (Render's free 512 MB) lower the heap share.
+ENV JAVA_OPTS="-XX:MaxRAMPercentage=75"
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar app.jar"]
