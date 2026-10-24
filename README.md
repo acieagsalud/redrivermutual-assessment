@@ -291,13 +291,41 @@ For these commands, Postgres and RabbitMQ need their ports published: add `ports
 
 ## Use of AI tools
 
-> **Draft for the author to review and edit before submission.**
+I used Claude (Anthropic), through Claude Code, as a pair programmer on this project. This section covers what it did, what I decided, and how I checked its output.
 
-AI assistance (Claude, by Anthropic) was used throughout this project:
+### What the AI did
 
-- **Requirements and design:** breaking down the brief, listing ambiguities and assumptions, and discussing alternatives. Design decisions (transactional outbox, idempotent consumer, Resend idempotency keys, claim number scheme, technology choices) were made by me after reviewing the trade-offs.
-- **Implementation:** generating code and tests for the agreed design.
-- **Review and validation:** _[describe how you reviewed the code: for example reading every class, running the test suites, running the demo flows including the broker-outage scenario, and checking for secrets with `git log -p`]_.
-- **Security:** no secrets or personal credentials were shared with the AI tool or committed. _[add anything else you checked]_.
+- **Requirements:** turned the brief into a requirements breakdown with open questions and assumptions.
+- **Design:** drafted the design document and set out the alternatives and trade-offs for each decision.
+- **Implementation:** wrote most of the code, tests, Docker and CI configuration, and the first draft of this README.
+- **Restyling:** reworked the web form to follow the layout and look of redrivermutual.com/claims.
+
+### What I decided
+
+I made the design decisions after reviewing the trade-offs, and changed direction when the first suggestion fell short:
+
+- **Event delivery:** I chose a transactional outbox with an idempotent consumer. The alternative was publishing after the commit, which can lose events if the broker is down.
+- **Technology stack:** I checked the proposed stack against the brief's stated preference. That led to Java 21, Spring Boot, React and TypeScript, with RabbitMQ and Postgres.
+- **Duplicate emails:** I pushed back on "duplicate emails are unlikely" and asked for a design that prevents them. The result was the Resend idempotency key, with the event id as the key.
+- **Free services:** I limited the project to free services: RabbitMQ, Postgres, Mailpit, Resend's free tier and GitHub Actions.
+- **Styling and scope:** I set the styling direction, including correcting the brand colour. I also decided what stays out of scope, such as file upload and the extra claim fields on the company's form.
+
+### How the output was checked
+
+- **Automated tests:** 32 tests for the claims API, 19 for the notification service, and 25 for the web app. They cover unit, contract and Testcontainers integration tests against real Postgres, RabbitMQ and Mailpit.
+- **Failure scenarios:** the tests cover a rollback when the outbox write fails, duplicate event delivery, unreadable messages going to the dead-letter queue, and an SMTP outage with retries.
+- **CI:** GitHub Actions runs the backend build and tests, the frontend typecheck, tests and build, and the Docker image builds on every pull request.
+- **Manual run-through:** I ran the full stack locally with Docker Compose and submitted claims through the form. I confirmed the confirmation emails in Mailpit, and that Resend accepted the real send, as shown in the Resend dashboard.
+- **Broker outage:** the full stack was also exercised with RabbitMQ stopped. The claim still saved, and its email went out once the broker came back.
+- **Defects caught:** the checks caught real problems in the generated code before merge. One was a Hibernate column-type mismatch (`CHAR` vs `VARCHAR`). Another was a Dockerfile that copied the wrong Maven module. A third was a test approach that fought the transaction boundary, which was replaced by a real database-level failure.
+- **Code review:** I reviewed the changes in pull requests before merging them. I reviewed codebase to check that implementation matched planned design and ensured that no sensitive data (ie. api keys/creds) was committed.
+
+### Security and privacy
+
+- **No secrets shared or committed:** I never shared secrets or personal credentials with the AI tool. The Resend API key lives only in my local, git-ignored `.env`.
+- **History scanned:** the repository history was checked for committed keys and credentials, and none were found.
+- **Placeholder credentials only:** the configuration has no default credentials, and `.env.example` contains placeholders only.
+- **No personal data in logs:** logs carry event ids, claim numbers and correlation ids. Customer names and email addresses are not logged.
+- **Browser hardening:** the web container sends a strict Content Security Policy. Fonts are self-hosted, so the page loads nothing from third parties.
 
 I am accountable for the submitted solution and can explain every part of it.
