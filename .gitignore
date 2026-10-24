@@ -2,6 +2,8 @@
 target/
 node_modules/
 dist/
+test-results/
+playwright-report/
 
 # Local secrets and environment: never commit
 .env
