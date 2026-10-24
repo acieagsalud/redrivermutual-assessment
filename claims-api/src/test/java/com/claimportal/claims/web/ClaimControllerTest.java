@@ -6,10 +6,14 @@ import com.claimportal.claims.application.SubmittedClaim;
 import com.claimportal.claims.config.ClockConfig;
 import com.claimportal.claims.domain.ClaimStatus;
 import com.claimportal.claims.support.TestClaims;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -34,7 +38,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(ClaimController.class)
-@Import(ClockConfig.class)
+@Import({ClockConfig.class, ClaimControllerTest.Metrics.class})
 class ClaimControllerTest {
 
     private static final String URL = "/api/v1/claims";
@@ -45,10 +49,23 @@ class ClaimControllerTest {
     @MockitoBean
     private ClaimSubmissionService service;
 
+    @Autowired
+    private MeterRegistry meters;
+
+    @TestConfiguration
+    static class Metrics {
+        @Bean
+        MeterRegistry meterRegistry() {
+            return new SimpleMeterRegistry();
+        }
+    }
+
     private final LocalDate yesterday = LocalDate.now(ZoneId.of("America/Winnipeg")).minusDays(1);
 
     @Test
     void validSubmissionReturns201WithClaimNumber() throws Exception {
+        // The registry is shared by every test in this cached context, so measure the change.
+        double submittedBefore = meters.counter("claims.submitted").count();
         when(service.submit(any())).thenReturn(
                 new SubmittedClaim("CLM-7K4Q-9XHM", ClaimStatus.SUBMITTED, Instant.parse("2026-10-22T18:30:00Z")));
 
@@ -57,6 +74,8 @@ class ClaimControllerTest {
                 .andExpect(jsonPath("$.claimNumber").value("CLM-7K4Q-9XHM"))
                 .andExpect(jsonPath("$.status").value("SUBMITTED"))
                 .andExpect(jsonPath("$.submittedAt").value("2026-10-22T18:30:00Z"));
+
+        assertThat(meters.counter("claims.submitted").count()).isEqualTo(submittedBefore + 1);
     }
 
     @Test
@@ -120,6 +139,19 @@ class ClaimControllerTest {
                 .andExpect(jsonPath("$.detail").value("We could not process your claim. Please try again later."))
                 .andExpect(jsonPath("$.correlationId").exists())
                 .andExpect(content().string(not(containsString("hunter2"))));
+    }
+
+    @Test
+    void rejectedAndFailedSubmissionsAreNotCounted() throws Exception {
+        double submittedBefore = meters.counter("claims.submitted").count();
+        when(service.submit(any())).thenThrow(new IllegalStateException("transaction rolled back"));
+
+        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(TestClaims.validRequestJson(yesterday)))
+                .andExpect(status().isInternalServerError());
+        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isBadRequest());
+
+        assertThat(meters.counter("claims.submitted").count()).isEqualTo(submittedBefore);
     }
 
     @Test
