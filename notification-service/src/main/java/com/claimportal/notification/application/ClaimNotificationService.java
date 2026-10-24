@@ -4,6 +4,8 @@ import com.claimportal.notification.email.EmailComposer;
 import com.claimportal.notification.email.EmailSender;
 import com.claimportal.notification.messaging.ClaimSubmittedEvent;
 import com.claimportal.notification.persistence.ProcessedEventRepository;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -28,22 +30,35 @@ public class ClaimNotificationService {
     private final EmailComposer composer;
     private final EmailSender sender;
     private final Clock clock;
+    private final Counter emailsSent;
+    private final Counter duplicatesSkipped;
 
     public ClaimNotificationService(ProcessedEventRepository processedEvents, EmailComposer composer,
-                                    EmailSender sender, Clock clock) {
+                                    EmailSender sender, Clock clock, MeterRegistry meterRegistry) {
         this.processedEvents = processedEvents;
         this.composer = composer;
         this.sender = sender;
         this.clock = clock;
+        this.emailsSent = emailCounter(meterRegistry, "sent");
+        this.duplicatesSkipped = emailCounter(meterRegistry, "duplicate_skipped");
+    }
+
+    private static Counter emailCounter(MeterRegistry registry, String outcome) {
+        return Counter.builder("notification.emails")
+                .description("ClaimSubmitted events handled, by outcome")
+                .tag("outcome", outcome)
+                .register(registry);
     }
 
     @Transactional
     public void handle(ClaimSubmittedEvent event) {
         if (!processedEvents.markProcessed(event.eventId(), event.claimNumber(), clock.instant())) {
             log.info("Duplicate event skipped eventId={} claimNumber={}", event.eventId(), event.claimNumber());
+            duplicatesSkipped.increment();
             return;
         }
         sender.send(composer.claimReceived(event));
+        emailsSent.increment();
         // The recipient address is personal information: log the claim number only.
         log.info("Confirmation email sent eventId={} claimNumber={}", event.eventId(), event.claimNumber());
     }

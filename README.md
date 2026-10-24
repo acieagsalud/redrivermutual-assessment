@@ -29,6 +29,7 @@ docker compose up --build
 | Captured emails (Mailpit) | http://localhost:8025 |
 | RabbitMQ console | http://localhost:15672 (user and password from `.env`) |
 | Claims API health | http://localhost:8081/actuator/health |
+| Claims API metrics (Prometheus format) | http://localhost:8081/actuator/prometheus |
 
 The first build downloads Maven and npm dependencies and takes a few minutes. Every service has a health check, and Compose starts each one only when its dependencies are healthy.
 
@@ -192,13 +193,18 @@ With Mailpit (local), layer 2 is not available, so that narrow crash window coul
 ```bash
 mvn verify                 # all Java tests; needs Docker running for Testcontainers
 cd web && npm ci && npm test
+
+# End-to-end, against the running Compose stack
+docker compose up --build --detach --wait
+cd e2e && npm ci && npx playwright install chromium && npx playwright test
 ```
 
 | Suite | Count | Highlights |
 | --- | --- | --- |
-| claims-api | 32 | Claim and outbox commit or roll back together, against real PostgreSQL; relay publishes to real RabbitMQ with the event id as message id; validation and error shape; claim number format and collision retry |
+| claims-api | 33 | Claim and outbox commit or roll back together, against real PostgreSQL; relay publishes to real RabbitMQ with the event id as message id; validation and error shape; claim number format and collision retry |
 | notification-service | 19 | Same event delivered twice sends one email (real RabbitMQ, PostgreSQL and Mailpit); SMTP outage leads to DLQ without marking processed; malformed message goes to the DLQ unretried; HTML escaping; idempotency headers |
-| web | 24 | Field rules mirror the server; error summary and accessible descriptions; server errors mapped to fields; confirmation shows the claim number |
+| web | 25 | Field rules mirror the server; error summary and accessible descriptions; required fields announced to screen readers; server errors mapped to fields; confirmation shows the claim number |
+| e2e (Playwright) | 3 | Real browser against the full Compose stack: submit the form, see the claim number, and find exactly one email with that number in Mailpit; incomplete form stopped in the browser; API rejects invalid data on its own |
 
 The most important tests to discuss:
 
@@ -207,7 +213,20 @@ The most important tests to discuss:
 3. `SmtpOutageIntegrationTest`: retries, dead-lettering, and no "processed" mark left behind, so a replay still sends.
 4. The two `ClaimSubmittedContractTest` classes: producer and consumer agree on the event shape.
 
-CI (`.github/workflows/ci.yml`) runs the backend tests, the frontend typecheck, tests and build, and builds all container images.
+CI (`.github/workflows/ci.yml`) runs the backend tests, the frontend typecheck, tests and build, builds all container images, and runs the end-to-end suite against the full stack started with Docker Compose.
+
+### Metrics
+
+Both services expose `/actuator/prometheus`, with the standard JVM, HTTP, database pool and RabbitMQ metrics plus these business metrics:
+
+| Metric | Service | What it tells you |
+| --- | --- | --- |
+| `claims_submitted_total` | claims-api | Claims saved, counted after the transaction commits |
+| `outbox_pending` | claims-api | Events waiting for the broker. Steady growth means RabbitMQ is unreachable |
+| `outbox_published_total`, `outbox_publish_failures_total` | claims-api | Relay throughput and failed publish attempts |
+| `notification_emails_total{outcome="sent"\|"duplicate_skipped"}` | notification-service | Emails sent, and redelivered events the idempotency check stopped |
+
+The claims API's endpoint is published on port 8081. The notification service's port is internal to Compose, so read it with `docker compose exec notification-service wget -qO- localhost:8082/actuator/prometheus`.
 
 ---
 
@@ -245,7 +264,7 @@ Authentication and customer accounts, policy verification, photo upload, anythin
 | --- | --- | --- |
 | Reliability | Outbox, publisher confirms, idempotent consumer, retries, DLQ | DLQ alerting and a replay tool; outbox cleanup job |
 | Security | Validation, escaping, secrets in env, least-privilege DB users | Authentication or policy-holder verification, rate limiting and CAPTCHA, secrets manager, TLS everywhere |
-| Observability | Health checks, correlation ids across services | Metrics (outbox backlog, DLQ depth, send latency), tracing (OpenTelemetry), JSON logs to a central store, dashboards |
+| Observability | Health checks, correlation ids across services, Prometheus metrics (below) | Prometheus and Grafana with alerts, DLQ depth from RabbitMQ, tracing (OpenTelemetry), JSON logs to a central store |
 | Scale | Relay uses `SKIP LOCKED`, so several API instances can run | Load testing; partition or CDC-based relay at high volume |
 | Data | Flyway migrations | Retention policy for claim PII, backups, encryption at rest |
 
@@ -254,7 +273,7 @@ Authentication and customer accounts, policy verification, photo upload, anythin
 1. Verify the policy number against a policy system, and confirm the policy holder's identity (for example postal code plus last name).
 2. Photo and document upload to object storage with virus scanning.
 3. Claim status lookup page, which is where the non-guessable claim number pays off.
-4. DLQ replay endpoint and an alert on DLQ depth and outbox backlog.
+4. DLQ replay endpoint, and alerts on DLQ depth and on the `outbox_pending` metric.
 5. OpenTelemetry tracing through HTTP and AMQP headers.
 6. French translation.
 
@@ -266,6 +285,7 @@ Authentication and customer accounts, policy verification, photo upload, anythin
 claims-api/              Spring Boot service: submission, outbox, relay
 notification-service/    Spring Boot service: consumer, idempotency, email
 web/                     React + TypeScript app and nginx config
+e2e/                     Playwright end-to-end tests against the Compose stack
 contracts/               ClaimSubmitted event fixture shared by both services' tests
 infra/postgres/          Creates the two databases and users on first start
 docker-compose.yml       Full local stack
@@ -312,7 +332,7 @@ I made the design decisions after reviewing the trade-offs, and changed directio
 
 ### How the output was checked
 
-- **Automated tests:** 32 tests for the claims API, 19 for the notification service, and 25 for the web app. They cover unit, contract and Testcontainers integration tests against real Postgres, RabbitMQ and Mailpit.
+- **Automated tests:** 33 tests for the claims API, 19 for the notification service, 25 for the web app, and 3 end-to-end browser tests against the full stack. They cover unit, contract and Testcontainers integration tests against real Postgres, RabbitMQ and Mailpit.
 - **Failure scenarios:** the tests cover a rollback when the outbox write fails, duplicate event delivery, unreadable messages going to the dead-letter queue, and an SMTP outage with retries.
 - **CI:** GitHub Actions runs the backend build and tests, the frontend typecheck, tests and build, and the Docker image builds on every pull request.
 - **Manual run-through:** I ran the full stack locally with Docker Compose and submitted claims through the form. I confirmed the confirmation emails in Mailpit, and that Resend accepted the real send, as shown in the Resend dashboard.

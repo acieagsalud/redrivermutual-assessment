@@ -1,6 +1,7 @@
 package com.claimportal.claims.outbox;
 
 import com.claimportal.claims.config.OutboxProperties;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.AmqpException;
 
@@ -24,7 +25,8 @@ class OutboxRelayTest {
 
     private final OutboxEventRepository repository = mock(OutboxEventRepository.class);
     private final EventPublisher publisher = mock(EventPublisher.class);
-    private final OutboxRelay relay = new OutboxRelay(repository, publisher, new OutboxProperties(50), Clock.fixed(NOW, ZoneOffset.UTC));
+    private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
+    private final OutboxRelay relay = new OutboxRelay(repository, publisher, new OutboxProperties(50), Clock.fixed(NOW, ZoneOffset.UTC), meters);
 
     @Test
     void marksEventPublishedOnlyAfterTheBrokerConfirms() {
@@ -50,6 +52,15 @@ class OutboxRelayTest {
         assertThat(event.isPublished()).isFalse();
         assertThat(event.getAttempts()).isEqualTo(1);
         assertThat(event.getLastError()).contains("Connection refused");
+        assertThat(meters.counter("outbox.publish.failures").count()).isEqualTo(1);
+        assertThat(meters.counter("outbox.published").count()).isZero();
+    }
+
+    @Test
+    void reportsPendingEventsAsAGauge() {
+        when(repository.countByPublishedAtIsNull()).thenReturn(3L);
+
+        assertThat(meters.get("outbox.pending").gauge().value()).isEqualTo(3);
     }
 
     @Test
