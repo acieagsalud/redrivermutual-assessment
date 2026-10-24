@@ -66,5 +66,6 @@ class ClaimNotificationServiceTest {
         doThrow(new MailSendException("SMTP unavailable")).when(sender).send(email);
 
         assertThatThrownBy(() -> service.handle(event)).isInstanceOf(MailSendException.class);
+        assertThat(meters.counter("notification.emails", "outcome", "sent").count()).isZero();
     }
 }

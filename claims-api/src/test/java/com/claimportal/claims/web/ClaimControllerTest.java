@@ -142,6 +142,19 @@ class ClaimControllerTest {
     }
 
     @Test
+    void rejectedAndFailedSubmissionsAreNotCounted() throws Exception {
+        double submittedBefore = meters.counter("claims.submitted").count();
+        when(service.submit(any())).thenThrow(new IllegalStateException("transaction rolled back"));
+
+        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(TestClaims.validRequestJson(yesterday)))
+                .andExpect(status().isInternalServerError());
+        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isBadRequest());
+
+        assertThat(meters.counter("claims.submitted").count()).isEqualTo(submittedBefore);
+    }
+
+    @Test
     void echoesASafeCorrelationIdAndReplacesAnUnsafeOne() throws Exception {
         when(service.submit(any())).thenReturn(new SubmittedClaim("CLM-7K4Q-9XHM", ClaimStatus.SUBMITTED, Instant.now()));
 

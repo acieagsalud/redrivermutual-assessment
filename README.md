@@ -30,8 +30,26 @@ docker compose up --build
 | RabbitMQ console | http://localhost:15672 (user and password from `.env`) |
 | Claims API health | http://localhost:8081/actuator/health |
 | Claims API metrics (Prometheus format) | http://localhost:8081/actuator/prometheus |
+| Grafana dashboard | http://localhost:3000 (view without signing in; `admin` and `GRAFANA_ADMIN_PASSWORD` from `.env` to edit) |
+| Prometheus | http://localhost:9090 |
 
 The first build downloads Maven and npm dependencies and takes a few minutes. Every service has a health check, and Compose starts each one only when its dependencies are healthy.
+
+### Changing database passwords
+
+Postgres creates the `claims` and `notifications` users only when the `postgres-data` volume is first created ([infra/postgres/init-databases.sh](infra/postgres/init-databases.sh)). After that, editing `CLAIMS_DB_PASSWORD` or `NOTIFICATIONS_DB_PASSWORD` in `.env` does not change the passwords stored in the database, and the services fail on startup with `password authentication failed`. Either:
+
+- **Reset the database** (deletes all stored claims): `docker compose down -v && docker compose up --build`
+- **Or update the password in place**, keeping the data:
+
+  ```bash
+  docker compose up -d postgres   # picks up the new .env values
+  echo "ALTER USER claims PASSWORD :'pw';" \
+    | docker compose exec -T postgres sh -c 'psql -U postgres -v pw="$CLAIMS_DB_PASSWORD"'
+  docker compose restart claims-api
+  ```
+
+  For the notification service, use `notifications`, `$NOTIFICATIONS_DB_PASSWORD` and `notification-service` instead.
 
 ### Sending real email with Resend (optional)
 
@@ -61,6 +79,7 @@ Without a verified domain, Resend only delivers to the email address on your Res
    docker compose start rabbitmq
    # within seconds the outbox relay publishes it and the email arrives
    ```
+   On the Grafana dashboard (http://localhost:3000), **Outbox pending** rises while the broker is down, failed publish attempts appear, and the backlog drains to 0 when it returns.
 
 Submitting with curl:
 
@@ -194,17 +213,18 @@ With Mailpit (local), layer 2 is not available, so that narrow crash window coul
 mvn verify                 # all Java tests; needs Docker running for Testcontainers
 cd web && npm ci && npm test
 
-# End-to-end, against the running Compose stack
+# End-to-end, against the running Compose stack. Needs EMAIL_PROVIDER=mailpit:
+# the email test reads Mailpit, and Resend rejects the test's @example.com addresses.
 docker compose up --build --detach --wait
 cd e2e && npm ci && npx playwright install chromium && npx playwright test
 ```
 
 | Suite | Count | Highlights |
 | --- | --- | --- |
-| claims-api | 33 | Claim and outbox commit or roll back together, against real PostgreSQL; relay publishes to real RabbitMQ with the event id as message id; validation and error shape; claim number format and collision retry |
+| claims-api | 34 | Claim and outbox commit or roll back together, against real PostgreSQL; relay publishes to real RabbitMQ with the event id as message id; validation and error shape; claim number format and collision retry |
 | notification-service | 19 | Same event delivered twice sends one email (real RabbitMQ, PostgreSQL and Mailpit); SMTP outage leads to DLQ without marking processed; malformed message goes to the DLQ unretried; HTML escaping; idempotency headers |
 | web | 25 | Field rules mirror the server; error summary and accessible descriptions; required fields announced to screen readers; server errors mapped to fields; confirmation shows the claim number |
-| e2e (Playwright) | 3 | Real browser against the full Compose stack: submit the form, see the claim number, and find exactly one email with that number in Mailpit; incomplete form stopped in the browser; API rejects invalid data on its own |
+| e2e (Playwright) | 6 | Real browser against the full Compose stack: submit the form, see the claim number, and find exactly one email with that number in Mailpit; incomplete form stopped in the browser; API rejects invalid data on its own; Prometheus scrapes both services, every Grafana panel query returns data, and the dashboard is provisioned |
 
 The most important tests to discuss:
 
@@ -226,7 +246,9 @@ Both services expose `/actuator/prometheus`, with the standard JVM, HTTP, databa
 | `outbox_published_total`, `outbox_publish_failures_total` | claims-api | Relay throughput and failed publish attempts |
 | `notification_emails_total{outcome="sent"\|"duplicate_skipped"}` | notification-service | Emails sent, and redelivered events the idempotency check stopped |
 
-The claims API's endpoint is published on port 8081. The notification service's port is internal to Compose, so read it with `docker compose exec notification-service wget -qO- localhost:8082/actuator/prometheus`.
+The Compose stack includes Prometheus, which scrapes both services every 5 seconds ([infra/prometheus/prometheus.yml](infra/prometheus/prometheus.yml)), and Grafana with a pre-built **Claim Portal** dashboard ([infra/grafana/](infra/grafana/)): services up, outbox backlog, relay throughput and failures, API responses by status, and confirmation emails by outcome. Open it at http://localhost:3000.
+
+To read the raw endpoints: the claims API's is published on port 8081. The notification service's port is internal to Compose, so read it with `docker compose exec notification-service wget -qO- localhost:8082/actuator/prometheus`.
 
 ---
 
@@ -239,6 +261,7 @@ The claims API's endpoint is published on port 8081. The notification service's 
 - **Log injection:** an incoming `X-Correlation-Id` is accepted only if it matches `[A-Za-z0-9-]{1,64}`.
 - **Headers:** nginx sets `Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options` and `Referrer-Policy`.
 - **Least privilege:** each service has its own database user and database. Containers run the JVM as a non-root user.
+- **Monitoring endpoints:** `/actuator/prometheus`, Prometheus and Grafana's anonymous read-only view have no authentication. That suits a local demo only; production would serve actuator on a separate management port and put the monitoring tools behind single sign-on.
 
 ---
 
@@ -264,7 +287,7 @@ Authentication and customer accounts, policy verification, photo upload, anythin
 | --- | --- | --- |
 | Reliability | Outbox, publisher confirms, idempotent consumer, retries, DLQ | DLQ alerting and a replay tool; outbox cleanup job |
 | Security | Validation, escaping, secrets in env, least-privilege DB users | Authentication or policy-holder verification, rate limiting and CAPTCHA, secrets manager, TLS everywhere |
-| Observability | Health checks, correlation ids across services, Prometheus metrics (below) | Prometheus and Grafana with alerts, DLQ depth from RabbitMQ, tracing (OpenTelemetry), JSON logs to a central store |
+| Observability | Health checks, correlation ids across services, Prometheus metrics with a Grafana dashboard (below) | Alerting rules and on-call routing, DLQ depth from RabbitMQ, tracing (OpenTelemetry), JSON logs to a central store |
 | Scale | Relay uses `SKIP LOCKED`, so several API instances can run | Load testing; partition or CDC-based relay at high volume |
 | Data | Flyway migrations | Retention policy for claim PII, backups, encryption at rest |
 
@@ -288,6 +311,8 @@ web/                     React + TypeScript app and nginx config
 e2e/                     Playwright end-to-end tests against the Compose stack
 contracts/               ClaimSubmitted event fixture shared by both services' tests
 infra/postgres/          Creates the two databases and users on first start
+infra/prometheus/        Scrape config for both services
+infra/grafana/           Provisioned data source and Claim Portal dashboard
 docker-compose.yml       Full local stack
 .env.example             Template for local credentials (copy to .env)
 .github/workflows/       CI
@@ -332,9 +357,9 @@ I made the design decisions after reviewing the trade-offs, and changed directio
 
 ### How the output was checked
 
-- **Automated tests:** 33 tests for the claims API, 19 for the notification service, 25 for the web app, and 3 end-to-end browser tests against the full stack. They cover unit, contract and Testcontainers integration tests against real Postgres, RabbitMQ and Mailpit.
+- **Automated tests:** 34 tests for the claims API, 19 for the notification service, 25 for the web app, and 6 end-to-end tests against the full stack. They cover unit, contract and Testcontainers integration tests against real Postgres, RabbitMQ and Mailpit.
 - **Failure scenarios:** the tests cover a rollback when the outbox write fails, duplicate event delivery, unreadable messages going to the dead-letter queue, and an SMTP outage with retries.
-- **CI:** GitHub Actions runs the backend build and tests, the frontend typecheck, tests and build, and the Docker image builds on every pull request.
+- **CI:** GitHub Actions runs the backend build and tests, the frontend typecheck, tests and build, the Docker image builds, and the end-to-end suite against the full Compose stack on every pull request.
 - **Manual run-through:** I ran the full stack locally with Docker Compose and submitted claims through the form. I confirmed the confirmation emails in Mailpit, and that Resend accepted the real send, as shown in the Resend dashboard.
 - **Broker outage:** the full stack was also exercised with RabbitMQ stopped. The claim still saved, and its email went out once the broker came back.
 - **Defects caught:** the checks caught real problems in the generated code before merge. One was a Hibernate column-type mismatch (`CHAR` vs `VARCHAR`). Another was a Dockerfile that copied the wrong Maven module. A third was a test approach that fought the transaction boundary, which was replaced by a real database-level failure.
