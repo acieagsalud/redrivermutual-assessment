@@ -49,6 +49,10 @@ notification:
     name: notification.claim-submitted
     dead-letter-exchange: claims.events.dlx
     dead-letter-queue: notification.claim-submitted.dlq
+  processed-event:
+    # Far longer than any redelivery window, then deleted nightly (Winnipeg time).
+    retention: ${PROCESSED_EVENT_RETENTION:P30D}
+    cleanup-cron: "0 45 3 * * *"
 
 management:
   endpoints:

@@ -50,9 +50,10 @@ public class ClaimSubmittedListener {
             return event;
         } catch (JacksonException | IllegalArgumentException e) {
             // Retrying cannot fix a malformed message: send it straight to the dead-letter queue.
-            log.error("Unreadable ClaimSubmitted message messageId={}: {}",
-                    message.getMessageProperties().getMessageId(), e.getMessage());
-            throw new AmqpRejectAndDontRequeueException("Unreadable ClaimSubmitted message", e);
+            // Only the error type is logged: parser messages can quote field values such as the email address.
+            log.error("Unreadable ClaimSubmitted message messageId={} error={}",
+                    message.getMessageProperties().getMessageId(), e.getClass().getSimpleName());
+            throw new AmqpRejectAndDontRequeueException("Unreadable ClaimSubmitted message");
         }
     }
 }

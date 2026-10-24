@@ -32,6 +32,9 @@ claims:
   outbox:
     batch-size: 50
     poll-interval-ms: 1000
+    # Published rows are kept this long for troubleshooting, then deleted nightly (Winnipeg time).
+    retention: ${OUTBOX_RETENTION:P7D}
+    cleanup-cron: "0 30 3 * * *"
 
 management:
   endpoints:

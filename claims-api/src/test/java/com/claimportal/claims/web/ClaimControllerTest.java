@@ -15,7 +15,6 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -23,7 +22,6 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
-import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasSize;
@@ -193,17 +191,5 @@ class ClaimControllerTest {
                 .andExpect(jsonPath("$.title").value("Invalid Idempotency-Key"));
 
         verify(service, never()).submit(any(), any());
-    }
-
-    @Test
-    void aConcurrentRequestWithTheSameKeyGetsTheClaimThatWon() throws Exception {
-        when(service.submit(any(), eq("key-1"))).thenThrow(new DataIntegrityViolationException("uk_claim_idempotency_key"));
-        when(service.findExisting("key-1")).thenReturn(Optional.of(
-                new SubmittedClaim("CLM-WINN-ER00", ClaimStatus.SUBMITTED, Instant.parse("2026-10-22T18:30:00Z"), true)));
-
-        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).header("Idempotency-Key", "key-1")
-                        .content(TestClaims.validRequestJson(yesterday)))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.claimNumber").value("CLM-WINN-ER00"));
     }
 }

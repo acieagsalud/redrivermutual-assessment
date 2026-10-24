@@ -7,8 +7,9 @@ import com.claimportal.claims.event.ClaimSubmittedEvent;
 import com.claimportal.claims.outbox.OutboxWriter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionOperations;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -31,22 +32,38 @@ public class ClaimSubmissionService {
     private final ClaimNumberGenerator claimNumberGenerator;
     private final OutboxWriter outboxWriter;
     private final Clock clock;
+    private final TransactionOperations transactions;
 
     public ClaimSubmissionService(ClaimRepository claimRepository, ClaimNumberGenerator claimNumberGenerator,
-                                  OutboxWriter outboxWriter, Clock clock) {
+                                  OutboxWriter outboxWriter, Clock clock, TransactionOperations transactions) {
         this.claimRepository = claimRepository;
         this.claimNumberGenerator = claimNumberGenerator;
         this.outboxWriter = outboxWriter;
         this.clock = clock;
+        this.transactions = transactions;
     }
 
     /**
      * Saves a new claim, or returns the one already created with the same idempotency key. A null key
-     * always creates a claim. Two concurrent requests with the same new key can both pass the lookup;
-     * the unique index then rejects the second, and the caller resolves it with {@link #findExisting}.
+     * always creates a claim.
+     *
+     * <p>The transaction is managed here rather than with {@code @Transactional} because a duplicate key
+     * only shows up when the insert commits: two concurrent requests with the same new key can both pass
+     * the lookup, the unique index rejects the second, and that request then returns the first one's claim
+     * from a fresh read.
      */
-    @Transactional
     public SubmittedClaim submit(NewClaim request, String idempotencyKey) {
+        try {
+            return transactions.execute(tx -> submitInTransaction(request, idempotencyKey));
+        } catch (DataIntegrityViolationException e) {
+            if (idempotencyKey == null) {
+                throw e;
+            }
+            return findExisting(idempotencyKey).orElseThrow(() -> e);
+        }
+    }
+
+    private SubmittedClaim submitInTransaction(NewClaim request, String idempotencyKey) {
         if (idempotencyKey != null) {
             Optional<SubmittedClaim> existing = findExisting(idempotencyKey);
             if (existing.isPresent()) {
@@ -80,8 +97,7 @@ public class ClaimSubmissionService {
         return new SubmittedClaim(claim.getClaimNumber(), claim.getStatus(), now);
     }
 
-    @Transactional(readOnly = true)
-    public Optional<SubmittedClaim> findExisting(String idempotencyKey) {
+    private Optional<SubmittedClaim> findExisting(String idempotencyKey) {
         return claimRepository.findByIdempotencyKey(idempotencyKey)
                 .map(c -> new SubmittedClaim(c.getClaimNumber(), c.getStatus(), c.getCreatedAt(), true));
     }

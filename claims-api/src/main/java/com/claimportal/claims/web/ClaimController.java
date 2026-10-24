@@ -10,7 +10,6 @@ import com.claimportal.claims.web.dto.SubmitClaimResponse;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.validation.Valid;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -53,16 +52,7 @@ public class ClaimController {
         if (idempotencyKey != null && !IDEMPOTENCY_KEY.matcher(idempotencyKey).matches()) {
             throw new InvalidIdempotencyKeyException();
         }
-        SubmittedClaim result;
-        try {
-            result = submissionService.submit(toNewClaim(request), idempotencyKey);
-        } catch (DataIntegrityViolationException e) {
-            // A concurrent request with the same key committed first; return its claim.
-            if (idempotencyKey == null) {
-                throw e;
-            }
-            result = submissionService.findExisting(idempotencyKey).orElseThrow(() -> e);
-        }
+        SubmittedClaim result = submissionService.submit(toNewClaim(request), idempotencyKey);
         if (!result.replayed()) {
             claimsSubmitted.increment();
         }

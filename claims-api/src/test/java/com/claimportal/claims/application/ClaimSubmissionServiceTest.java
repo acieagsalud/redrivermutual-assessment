@@ -10,6 +10,8 @@ import com.claimportal.claims.support.TestClaims;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.transaction.support.TransactionOperations;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -38,7 +40,8 @@ class ClaimSubmissionServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new ClaimSubmissionService(claimRepository, generator, outboxWriter, Clock.fixed(NOW, ZoneOffset.UTC));
+        service = new ClaimSubmissionService(claimRepository, generator, outboxWriter, Clock.fixed(NOW, ZoneOffset.UTC),
+                TransactionOperations.withoutTransaction());
     }
 
     @Test
@@ -107,6 +110,30 @@ class ClaimSubmissionServiceTest {
         assertThat(result.replayed()).isTrue();
         verify(claimRepository, never()).save(any());
         verify(outboxWriter, never()).append(any(UUID.class), any());
+    }
+
+    @Test
+    void aConcurrentRequestThatLosesTheRaceOnTheKeyReturnsTheWinnersClaim() {
+        TransactionOperations failingCommit = mock(TransactionOperations.class);
+        when(failingCommit.execute(any())).thenThrow(new DataIntegrityViolationException("uk_claim_idempotency_key"));
+        service = new ClaimSubmissionService(claimRepository, generator, outboxWriter, Clock.fixed(NOW, ZoneOffset.UTC), failingCommit);
+        Claim winner = savedClaimWithKey("key-1");
+        when(claimRepository.findByIdempotencyKey("key-1")).thenReturn(Optional.of(winner));
+
+        SubmittedClaim result = service.submit(TestClaims.newClaim(), "key-1");
+
+        assertThat(result.claimNumber()).isEqualTo(winner.getClaimNumber());
+        assertThat(result.replayed()).isTrue();
+    }
+
+    @Test
+    void anIntegrityErrorWithoutAKeyIsNotSwallowed() {
+        TransactionOperations failingCommit = mock(TransactionOperations.class);
+        when(failingCommit.execute(any())).thenThrow(new DataIntegrityViolationException("uk_claim_claim_number"));
+        service = new ClaimSubmissionService(claimRepository, generator, outboxWriter, Clock.fixed(NOW, ZoneOffset.UTC), failingCommit);
+
+        assertThatThrownBy(() -> service.submit(TestClaims.newClaim(), null))
+                .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     private static Claim savedClaimWithKey(String key) {
