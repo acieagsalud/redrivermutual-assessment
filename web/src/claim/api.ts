@@ -6,6 +6,7 @@ export type SubmitResult =
   | { kind: 'failed'; message: string; reference?: string }
 
 const GENERIC_FAILURE = 'We could not submit your claim right now. Please try again in a few minutes.'
+const RATE_LIMITED = 'Too many claims were submitted from your connection in a short time. Please wait a minute and try again.'
 
 function toRequestBody(v: ClaimFormValues) {
   const blankToNull = (s: string) => (s.trim() ? s.trim() : null)
@@ -47,6 +48,10 @@ export async function submitClaim(
     })
   } catch {
     return { kind: 'failed', message: GENERIC_FAILURE }
+  }
+
+  if (response.status === 429) {
+    return { kind: 'failed', message: RATE_LIMITED }
   }
 
   const body = await response.json().catch(() => ({}))

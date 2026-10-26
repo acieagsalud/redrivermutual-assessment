@@ -37,6 +37,12 @@ describe('submitClaim', () => {
     expect(result).toMatchObject({ kind: 'failed', reference: 'abc-123' })
   })
 
+  it('tells the customer to wait when submissions are rate limited', async () => {
+    const result = await submitClaim(EMPTY_FORM, 'key-1', vi.fn().mockResolvedValue(new Response('<html>429</html>', { status: 429 })))
+
+    expect(result).toMatchObject({ kind: 'failed', message: expect.stringContaining('wait a minute') })
+  })
+
   it('returns a generic failure when the network is down', async () => {
     const result = await submitClaim(EMPTY_FORM, 'key-1', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
 
