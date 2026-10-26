@@ -116,13 +116,6 @@ export function ClaimForm({ onAccepted, submit = submitClaim }: Props) {
         </div>
       )}
 
-      {failure && (
-        <div className="banner banner--error" role="alert">
-          <p>{failure.message}</p>
-          {failure.reference && <p className="reference">Reference: {failure.reference}</p>}
-        </div>
-      )}
-
       <fieldset>
         <legend>Policyholder</legend>
         {text('policyNumber', { hint: 'Find this on your policy documents, for example HO-12345678.' })}
@@ -196,6 +189,14 @@ export function ClaimForm({ onAccepted, submit = submitClaim }: Props) {
           {DESCRIPTION_MAX - values.description.length <= 100 ? `${DESCRIPTION_MAX - values.description.length} characters left` : ''}
         </p>
       </fieldset>
+
+      {/* Next to the button, where the customer is looking when the submit fails, so a retry is one click away. */}
+      {failure && (
+        <div className="banner banner--error" role="alert">
+          <p>{failure.message}</p>
+          {failure.reference && <p className="reference">Reference: {failure.reference}</p>}
+        </div>
+      )}
 
       <button type="submit" className="primary" disabled={submitting} aria-disabled={submitting}>
         {submitting ? 'Submitting…' : 'Submit Claim'}

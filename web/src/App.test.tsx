@@ -81,6 +81,10 @@ describe('claim submission', () => {
 
     expect(await screen.findByText(/try again in a few minutes/)).toBeInTheDocument()
     expect(screen.getByText('Reference: abc-123')).toBeInTheDocument()
+    // Shown right above the button the customer just pressed, not at the top of a long form.
+    expect(screen.getByText('Reference: abc-123').closest('[role="alert"]')?.nextElementSibling).toBe(
+      screen.getByRole('button', { name: 'Submit Claim' }),
+    )
     expect(screen.queryByTestId('claim-number')).not.toBeInTheDocument()
   })
 
