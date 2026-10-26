@@ -7,11 +7,14 @@ import com.claimportal.claims.event.ClaimSubmittedEvent;
 import com.claimportal.claims.outbox.OutboxWriter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionOperations;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -29,18 +32,47 @@ public class ClaimSubmissionService {
     private final ClaimNumberGenerator claimNumberGenerator;
     private final OutboxWriter outboxWriter;
     private final Clock clock;
+    private final TransactionOperations transactions;
 
     public ClaimSubmissionService(ClaimRepository claimRepository, ClaimNumberGenerator claimNumberGenerator,
-                                  OutboxWriter outboxWriter, Clock clock) {
+                                  OutboxWriter outboxWriter, Clock clock, TransactionOperations transactions) {
         this.claimRepository = claimRepository;
         this.claimNumberGenerator = claimNumberGenerator;
         this.outboxWriter = outboxWriter;
         this.clock = clock;
+        this.transactions = transactions;
     }
 
-    @Transactional
-    public SubmittedClaim submit(NewClaim request) {
-        Instant now = clock.instant();
+    /**
+     * Saves a new claim, or returns the one already created with the same idempotency key. A null key
+     * always creates a claim.
+     *
+     * <p>The transaction is managed here rather than with {@code @Transactional} because a duplicate key
+     * only shows up when the insert commits: two concurrent requests with the same new key can both pass
+     * the lookup, the unique index rejects the second, and that request then returns the first one's claim
+     * from a fresh read.
+     */
+    public SubmittedClaim submit(NewClaim request, String idempotencyKey) {
+        try {
+            return transactions.execute(tx -> submitInTransaction(request, idempotencyKey));
+        } catch (DataIntegrityViolationException e) {
+            if (idempotencyKey == null) {
+                throw e;
+            }
+            return findExisting(idempotencyKey).orElseThrow(() -> e);
+        }
+    }
+
+    private SubmittedClaim submitInTransaction(NewClaim request, String idempotencyKey) {
+        if (idempotencyKey != null) {
+            Optional<SubmittedClaim> existing = findExisting(idempotencyKey);
+            if (existing.isPresent()) {
+                log.info("Repeated submission returned existing claimNumber={}", existing.get().claimNumber());
+                return existing.get();
+            }
+        }
+        // PostgreSQL stores microseconds; truncating keeps a replayed response identical to the first one.
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
         Claim claim = Claim.builder()
                 .id(UUID.randomUUID())
                 .claimNumber(unusedClaimNumber())
@@ -54,6 +86,7 @@ public class ClaimSubmissionService {
                 .address(request.address())
                 .description(request.description())
                 .createdAt(now)
+                .idempotencyKey(idempotencyKey)
                 .build();
 
         claimRepository.save(claim);
@@ -62,6 +95,11 @@ public class ClaimSubmissionService {
         // Claim number only: name, email and address are personal information and stay out of logs.
         log.info("Claim submitted claimNumber={} lossType={}", claim.getClaimNumber(), claim.getLossType());
         return new SubmittedClaim(claim.getClaimNumber(), claim.getStatus(), now);
+    }
+
+    private Optional<SubmittedClaim> findExisting(String idempotencyKey) {
+        return claimRepository.findByIdempotencyKey(idempotencyKey)
+                .map(c -> new SubmittedClaim(c.getClaimNumber(), c.getStatus(), c.getCreatedAt(), true));
     }
 
     /**

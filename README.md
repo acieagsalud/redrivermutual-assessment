@@ -16,7 +16,13 @@ A customer submits a home insurance claim online, gets a claim number straight a
 
 ## Quick start
 
-**Prerequisites:** Docker with Docker Compose v2. Nothing else is needed to run the app.
+**Prerequisites**
+
+| To | You need |
+| --- | --- |
+| Run and demo the app | Docker with Docker Compose v2. Nothing else; every supporting service (PostgreSQL, RabbitMQ, Mailpit, Prometheus, Grafana) runs in Compose at no cost |
+| Run the tests or the services outside Docker | Java 21, Maven 3.9+, Node.js 22, and Docker running (Testcontainers starts PostgreSQL, RabbitMQ and Mailpit for the integration tests) |
+| Send real email (optional) | A free Resend account and API key, see below |
 
 ```bash
 cp .env.example .env          # local-only credentials; .env is git-ignored
@@ -121,7 +127,7 @@ The customer's request ends when claims-api commits the claim and its outbox row
 | web | `ClaimController`, `SubmitClaimRequest`, `GlobalExceptionHandler` | HTTP, Bean Validation, RFC 9457 problem-details errors |
 | application | `ClaimSubmissionService` | One transaction: claim number, save claim, write outbox row |
 | domain | `Claim`, `Address`, `ClaimNumberGenerator`, `RandomClaimNumberGenerator` | The claim and how it is numbered |
-| outbox | `OutboxWriter`, `OutboxRelay`, `OutboxPoller`, `EventPublisher`, `RabbitEventPublisher` | Transactional outbox and broker publishing |
+| outbox | `OutboxWriter`, `OutboxRelay`, `OutboxPoller`, `EventPublisher`, `RabbitEventPublisher`, `OutboxCleanup` | Transactional outbox, broker publishing, nightly cleanup |
 | observability | `CorrelationIdFilter` | Correlation id on every log line and response |
 
 **notification-service** (`notification-service/`)
@@ -131,7 +137,7 @@ The customer's request ends when claims-api commits the claim and its outbox row
 | messaging | `ClaimSubmittedListener` | Broker message to service call; rejects unreadable messages |
 | application | `ClaimNotificationService` | Idempotency check, then compose and send |
 | email | `EmailComposer`, `EmailSender`, `SmtpEmailSender` | Thymeleaf rendering and SMTP delivery |
-| persistence | `ProcessedEventRepository` | `INSERT ... ON CONFLICT DO NOTHING` dedupe |
+| persistence | `ProcessedEventRepository`, `ProcessedEventCleanup` | `INSERT ... ON CONFLICT DO NOTHING` dedupe; nightly cleanup |
 | config | `RabbitTopologyConfig`, `RetryConfig` | Queue, DLQ, retry policy |
 
 **web** (`web/`): `ClaimForm`, `Confirmation`, `validation.ts` (mirrors the server rules), `api.ts` (maps server errors back onto fields).
@@ -142,9 +148,9 @@ The interfaces `ClaimNumberGenerator`, `EventPublisher` and `EmailSender` are th
 
 | Database | Table | Purpose |
 | --- | --- | --- |
-| `claims` | `claim` | The submitted claim. `claim_number` has a unique constraint |
-| `claims` | `outbox_event` | Events waiting to be published. `published_at IS NULL` means unsent (partial index) |
-| `notifications` | `processed_event` | One row per emailed event. The primary key on `event_id` makes the consumer idempotent |
+| `claims` | `claim` | The submitted claim. `claim_number` and the optional `idempotency_key` have unique constraints |
+| `claims` | `outbox_event` | Events waiting to be published. `published_at IS NULL` means unsent (partial index). Published rows are deleted after 7 days |
+| `notifications` | `processed_event` | One row per emailed event. The primary key on `event_id` makes the consumer idempotent. Rows are deleted after 30 days, well past any redelivery |
 
 Migrations live in each service's `src/main/resources/db/migration` and run on startup (Flyway). Each service has its own database user and cannot connect to the other's database.
 
@@ -153,6 +159,23 @@ Migrations live in each service's `src/main/resources/db/migration` and run on s
 `ClaimSubmitted` v1 is defined by [`contracts/claim-submitted.v1.json`](contracts/claim-submitted.v1.json). Each service owns its own Java type, and both test against the fixture. It carries only what the email needs (claim number, first name, email), so the address, policy number and damage description never travel over the broker.
 
 ---
+
+## How the engineering criteria are met
+
+| Criterion | Where to look |
+| --- | --- |
+| **Separation of concerns** | Five parts with one job each: the React UI (`web/`) only collects and checks input; `claims-api` validates, numbers and saves the claim; the outbox relay (`claims-api/.../outbox`) is the only code that publishes events; `notification-service`'s listener is the only consumer; its email package is the only code that sends email. The services share no code or database, only the event contract in `contracts/` |
+| **Layering and dependency injection** | Each service is layered web or messaging, then application, then domain or persistence (tables above). Dependencies point inwards: controllers map DTOs to application records (`NewClaim`, `SubmittedClaim`), and the application layer never sees HTTP or AMQP types. Every collaborator is constructor-injected, including `Clock` and `TransactionOperations`, so time and transactions are controllable in tests |
+| **Design patterns** | Transactional outbox and idempotent consumer (the core of the design); repository (Spring Data, `ProcessedEventRepository`); strategy behind interfaces (`ClaimNumberGenerator`, `EventPublisher`, `EmailSender`); builder (`Claim.builder()`); template rendering (Thymeleaf email); problem details for errors (RFC 9457) |
+| **SOLID** | Single responsibility: composing an email (`EmailComposer`) is separate from sending it (`SmtpEmailSender`), and polling (`OutboxPoller`) is separate from publishing (`OutboxRelay`). Open/closed and dependency inversion: business code depends on the three interfaces above, so RabbitMQ could become SQS, or SMTP could become an HTTP API, without touching it. Interface segregation: each interface has one method |
+| **Automated unit testing** | A test pyramid: fast unit tests with mocks for every rule and branch (validation, numbering, relay batching, dedupe, retries, error mapping), integration tests against real PostgreSQL, RabbitMQ and Mailpit through Testcontainers for the guarantees mocks cannot prove (rollback, publisher confirms, one email per event), contract tests on both sides of the event, and Playwright end to end. All run in CI on every pull request (see [Testing](#testing)) |
+| **Input validation** | Bean Validation on the request DTO plus a custom `@ValidLossDate`; the browser mirrors the same rules in `validation.ts` for convenience only. The consumer rejects unreadable or incomplete events straight to the DLQ |
+| **Error handling** | `GlobalExceptionHandler` returns RFC 9457 problem details with a correlation id and never a stack trace. Broker outages are absorbed by the outbox; email outages by retries with backoff, then the DLQ (see [Failure handling](#failure-handling)) |
+| **Configuration management** | All settings live in each service's `application.yml` and are overridden by environment variables; typed `@ConfigurationProperties` records for grouped settings; Spring profiles for the email provider (`resend`); credentials have no defaults and come only from `.env` |
+| **Logging** | One line per business event (claim submitted, email sent, duplicate skipped, publish failure) with the correlation id on every line via MDC, passed from the HTTP request through the event to the consumer. No personal information is logged (see [Security](#security)) |
+| **Containerization** | Multi-stage Dockerfiles, every app container runs as a non-root user, health checks on every service, and one `docker compose up --build` for the whole stack |
+| **Security** | See [Security](#security): no secrets in the repo, minimal personal information on the broker and none in logs, escaping, security headers, least-privilege database users |
+| **Pragmatism** | Choices sized to the exercise: a JPA entity as the domain model, a polling relay instead of change data capture, one Postgres container hosting both databases, anonymous submission. Each is listed with what production would need in [What is production-ready and what is not](#what-is-production-ready-and-what-is-not) |
 
 ## Key design decisions and trade-offs
 
@@ -178,6 +201,8 @@ Exactly-once delivery across a database and a mail provider is not achievable, b
 2. **Provider idempotency.** The one remaining gap is a crash after the provider accepted the email but before the commit. Every email carries `Resend-Idempotency-Key: <eventId>`, and Resend returns the original result for a repeated key within 24 hours instead of sending again. The email body is deterministic (no timestamps), as Resend requires. A stable `Message-ID` built from the event id is a final hint to mail clients.
 
 With Mailpit (local), layer 2 is not available, so that narrow crash window could produce a duplicate.
+
+The same thinking applies one step earlier, to the customer's request. If the network drops after the claim is saved but before the browser gets the response, the customer sees an error and presses Submit again. The form therefore sends an `Idempotency-Key` header, one random UUID per claim being reported, reused on every retry. A repeated key returns the original claim with the same 201 body, so there is no second claim and no second email. Two concurrent requests with the same key are settled by the unique index: the loser catches the violation and returns the winner's claim. The header is optional, so other API clients still work without it.
 
 ### 3. Other decisions
 
@@ -221,10 +246,10 @@ cd e2e && npm ci && npx playwright install chromium && npx playwright test
 
 | Suite | Count | Highlights |
 | --- | --- | --- |
-| claims-api | 34 | Claim and outbox commit or roll back together, against real PostgreSQL; relay publishes to real RabbitMQ with the event id as message id; validation and error shape; claim number format and collision retry |
-| notification-service | 19 | Same event delivered twice sends one email (real RabbitMQ, PostgreSQL and Mailpit); SMTP outage leads to DLQ without marking processed; malformed message goes to the DLQ unretried; HTML escaping; idempotency headers |
-| web | 25 | Field rules mirror the server; error summary and accessible descriptions; required fields announced to screen readers; server errors mapped to fields; confirmation shows the claim number |
-| e2e (Playwright) | 6 | Real browser against the full Compose stack: submit the form, see the claim number, and find exactly one email with that number in Mailpit; incomplete form stopped in the browser; API rejects invalid data on its own; Prometheus scrapes both services, every Grafana panel query returns data, and the dashboard is provisioned |
+| claims-api | 46 | Claim and outbox commit or roll back together, against real PostgreSQL; relay publishes to real RabbitMQ with the event id as message id; batched publish and backlog draining; a retried submission with the same idempotency key creates one claim and one event; validation and error shape; claim number format and collision retry; outbox cleanup |
+| notification-service | 20 | Same event delivered twice sends one email (real RabbitMQ, PostgreSQL and Mailpit); SMTP outage leads to DLQ without marking processed; malformed message goes to the DLQ unretried; HTML escaping; idempotency headers; processed-event cleanup |
+| web | 27 | Field rules mirror the server; error summary and accessible descriptions; required fields announced to screen readers; server errors mapped to fields; confirmation shows the claim number; a retry reuses the idempotency key; a rate-limited submission tells the customer to wait |
+| e2e (Playwright) | 8 | Real browser against the full Compose stack: submit the form, see the claim number, and find exactly one email with that number in Mailpit; incomplete form stopped in the browser; API rejects invalid data on its own; Prometheus scrapes both services, every Grafana panel query returns data, and the dashboard is provisioned; axe finds no WCAG 2.2 AA failures on the form, its error state or the confirmation, and the page reflows at 320 px |
 
 The most important tests to discuss:
 
@@ -255,13 +280,45 @@ To read the raw endpoints: the claims API's is published on port 8081. The notif
 ## Security
 
 - **Secrets:** no credentials in the repo. Compose reads them from a git-ignored `.env`, and the apps have no default passwords. The Resend API key is only ever an environment variable.
-- **Personal information:** logs contain claim numbers and event ids, never names, emails or addresses. The event payload carries only what the email needs.
+- **Personal information:** logs contain claim numbers and event ids, never names, emails or addresses. An unreadable event is logged by error type only, because parser messages can quote field values. The event payload carries only what the email needs.
 - **Input:** all rules are enforced server-side with length limits; the browser checks are only for convenience. nginx caps request bodies at 64 KB.
 - **Output:** Thymeleaf HTML-escapes customer input in the email (there is a test with `<script>`). The API never returns stack traces or exception messages.
 - **Log injection:** an incoming `X-Correlation-Id` is accepted only if it matches `[A-Za-z0-9-]{1,64}`.
-- **Headers:** nginx sets `Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options` and `Referrer-Policy`.
-- **Least privilege:** each service has its own database user and database. Containers run the JVM as a non-root user.
+- **Headers:** nginx sets `Content-Security-Policy` (including `base-uri`, `form-action` and `object-src`), `X-Frame-Options`, `X-Content-Type-Options` and `Referrer-Policy`, and hides its version.
+- **Abuse:** nginx limits claim submissions to 10 a minute per client IP, with a burst of 10, and returns 429, which the form explains. It's a per-IP limit only; a determined bot needs CAPTCHA or verification (see production gaps).
+- **Network exposure:** every host port in Compose binds to `127.0.0.1`, so Mailpit (which shows customer emails), the API, the RabbitMQ console and the monitoring tools can't be reached from other machines.
+- **Least privilege:** each service has its own database user and database. The JVM services run as a non-root user, and nginx uses the unprivileged image.
 - **Monitoring endpoints:** `/actuator/prometheus`, Prometheus and Grafana's anonymous read-only view have no authentication. That suits a local demo only; production would serve actuator on a separate management port and put the monitoring tools behind single sign-on.
+
+## Accessibility
+
+The target is **WCAG 2.2 Level AA**, the current W3C Recommendation. It includes 2.1 AA, which is what Canadian standards reference. The form follows the patterns of the GOV.UK and Canada.ca design systems:
+
+- Every field has a visible label, and hints and errors are tied to their field with `aria-describedby`; invalid fields set `aria-invalid`.
+- On submit, an error summary takes focus and links to each field. After a successful submit, focus moves to the confirmation heading.
+- `autocomplete` on every personal field (1.3.5), a skip link, landmarks for header, main and footer, and `lang="en"`.
+- A dark focus ring offset from the control, at 16:1 contrast (2.4.7, 1.4.11); text contrast at least 5.8:1.
+- Targets of at least 24 by 24 px, including the error summary links (2.5.8); nothing sticky that could cover the focused field (2.4.11).
+- Reflows at 320 px without horizontal scrolling (1.4.10). The character counter is announced only in the last 100 characters, so screen readers aren't interrupted on every keystroke.
+
+Automated checks (axe in the e2e suite) find roughly a third of WCAG issues. A full audit would add a screen reader pass (NVDA and VoiceOver) and testing with real users.
+
+### OWASP Top 10 (2025)
+
+Reviewed against the [OWASP Top 10 2025](https://top10.owasp.org/2025/).
+
+| Category | How it is handled | Left for production |
+| --- | --- | --- |
+| A01 Broken Access Control | The only public operation is submitting a claim; nothing can be read back except your own claim number. nginx forwards only `/api/`, so actuator is not reachable through it. Admin and monitoring tools bind to `127.0.0.1` | Authentication before any read endpoint (claim status) is added |
+| A02 Security Misconfiguration | Security headers (CSP, `X-Frame-Options`, `nosniff`, `Referrer-Policy`, `Permissions-Policy`), nginx version hidden, no stack traces in errors, actuator limited to `health`, `info` and `prometheus` with health details hidden, non-root containers, credentials without defaults | HSTS once TLS is in place; actuator on a separate management port |
+| A03 Software Supply Chain Failures | Lockfiles committed and installed with `npm ci`; Java versions managed by the Spring Boot BOM; CI fails on high or critical npm advisories (`npm audit`); GitHub Actions pinned to commit SHAs; base images pinned to versions | Maven dependency scanning (OWASP Dependency-Check or Dependabot) and image scanning (Trivy); pinning images by digest |
+| A04 Cryptographic Failures | No passwords or card data stored. Claim numbers come from `SecureRandom`. Resend SMTP uses TLS on port 465 with server identity checked | TLS for every hop, encryption at rest for claim data |
+| A05 Injection | JPA and `JdbcTemplate` with bound parameters only; Thymeleaf escapes customer text in the email (tested with `<script>`); correlation id and idempotency key restricted to `[A-Za-z0-9-]{1,64}` to stop log injection; the email subject carries only the claim number | None at this scope |
+| A06 Insecure Design | Transactional outbox, idempotent consumer and idempotent submission prevent lost or duplicated claims and emails; minimal personal information on the broker; per-IP rate limit on submissions | Policy-holder verification and CAPTCHA, since anyone can file against any policy number |
+| A07 Authentication Failures | No customer authentication by design (see Assumptions). Service accounts for PostgreSQL, RabbitMQ and Grafana use passwords from `.env`, never defaults | Customer identity verification; single sign-on for the admin tools |
+| A08 Software or Data Integrity Failures | Events are plain JSON records, with no polymorphic deserialization; incomplete or unreadable events go to the DLQ; producer and consumer contract tests pin the event shape | Signed events, if events ever cross a trust boundary |
+| A09 Security Logging and Alerting Failures | Correlation id on every log line; rejected submissions are logged with field names only; nginx logs rate-limited requests; Prometheus alert rules for a service down, an outbox backlog, publish failures, API 5xx errors and an unusual submission rate (http://localhost:9090/alerts) | Alertmanager routing to on-call; central log storage |
+| A10 Mishandling of Exceptional Conditions | One exception handler returns problem details and fails closed; timeouts on SMTP (5 s), the broker confirm (5 s) and the nginx proxy (15 s); failed publishes and sends are retried, never dropped, and a failed send leaves no "processed" mark | A DLQ replay tool |
 
 ---
 
@@ -285,10 +342,10 @@ Authentication and customer accounts, policy verification, photo upload, anythin
 
 | Area | In this MVP | For production |
 | --- | --- | --- |
-| Reliability | Outbox, publisher confirms, idempotent consumer, retries, DLQ | DLQ alerting and a replay tool; outbox cleanup job |
-| Security | Validation, escaping, secrets in env, least-privilege DB users | Authentication or policy-holder verification, rate limiting and CAPTCHA, secrets manager, TLS everywhere |
+| Reliability | Outbox, publisher confirms, idempotent consumer, idempotent submission, retries, DLQ, cleanup of old outbox and processed-event rows | DLQ alerting and a replay tool |
+| Security | Validation, escaping, secrets in env, least-privilege DB users, per-IP rate limit on submissions, host ports on localhost only, non-root containers | Authentication or policy-holder verification, CAPTCHA, secrets manager, TLS everywhere with HSTS, dependency and image scanning in CI |
 | Observability | Health checks, correlation ids across services, Prometheus metrics with a Grafana dashboard (below) | Alerting rules and on-call routing, DLQ depth from RabbitMQ, tracing (OpenTelemetry), JSON logs to a central store |
-| Scale | Relay uses `SKIP LOCKED`, so several API instances can run | Load testing; partition or CDC-based relay at high volume |
+| Scale | Stateless API; relay uses `SKIP LOCKED` so several instances share the outbox, publishes each batch with one broker confirm and keeps draining while batches come back full; 4 to 8 concurrent consumers per notification instance (`LISTENER_CONCURRENCY`) | Load testing; quorum queues and a RabbitMQ cluster; database read replicas and connection pooling (PgBouncer); partition or CDC-based relay at very high volume; a paid email plan (Resend's free tier caps daily volume) |
 | Data | Flyway migrations | Retention policy for claim PII, backups, encryption at rest |
 
 ## With more time

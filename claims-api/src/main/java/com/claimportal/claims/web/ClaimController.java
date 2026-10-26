@@ -13,13 +13,19 @@ import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.regex.Pattern;
+
 @RestController
 @RequestMapping("/api/v1/claims")
 public class ClaimController {
+
+    static final String IDEMPOTENCY_KEY_HEADER = "Idempotency-Key";
+    private static final Pattern IDEMPOTENCY_KEY = Pattern.compile("[A-Za-z0-9-]{1,64}");
 
     private final ClaimSubmissionService submissionService;
     private final Counter claimsSubmitted;
@@ -35,12 +41,21 @@ public class ClaimController {
     /**
      * 201 means the claim is saved and its confirmation email is queued. The email itself is sent
      * asynchronously by notification-service, so the client tells the customer to check their inbox.
+     *
+     * <p>An optional Idempotency-Key makes retries safe: a repeat of a key returns the claim the first
+     * request created, with the same 201 body, instead of creating a second claim and a second email.
      */
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    public SubmitClaimResponse submit(@Valid @RequestBody SubmitClaimRequest request) {
-        SubmittedClaim result = submissionService.submit(toNewClaim(request));
-        claimsSubmitted.increment();
+    public SubmitClaimResponse submit(@Valid @RequestBody SubmitClaimRequest request,
+                                      @RequestHeader(name = IDEMPOTENCY_KEY_HEADER, required = false) String idempotencyKey) {
+        if (idempotencyKey != null && !IDEMPOTENCY_KEY.matcher(idempotencyKey).matches()) {
+            throw new InvalidIdempotencyKeyException();
+        }
+        SubmittedClaim result = submissionService.submit(toNewClaim(request), idempotencyKey);
+        if (!result.replayed()) {
+            claimsSubmitted.increment();
+        }
         return new SubmitClaimResponse(result.claimNumber(), result.status().name(), result.submittedAt());
     }
 

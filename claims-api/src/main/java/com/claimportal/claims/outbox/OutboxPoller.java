@@ -13,8 +13,16 @@ public class OutboxPoller {
         this.relay = relay;
     }
 
+    /**
+     * Drains the backlog: keeps publishing while batches come back full, each batch in its own
+     * transaction, so a burst of claims or the backlog after a broker outage clears at broker speed
+     * rather than one batch per poll interval.
+     */
     @Scheduled(fixedDelayString = "${claims.outbox.poll-interval-ms:1000}")
     public void poll() {
-        relay.publishPending();
+        int published;
+        do {
+            published = relay.publishPending();
+        } while (relay.wasFullBatch(published));
     }
 }

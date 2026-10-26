@@ -10,10 +10,13 @@ import com.claimportal.claims.support.TestClaims;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.transaction.support.TransactionOperations;
 
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -37,14 +40,15 @@ class ClaimSubmissionServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new ClaimSubmissionService(claimRepository, generator, outboxWriter, Clock.fixed(NOW, ZoneOffset.UTC));
+        service = new ClaimSubmissionService(claimRepository, generator, outboxWriter, Clock.fixed(NOW, ZoneOffset.UTC),
+                TransactionOperations.withoutTransaction());
     }
 
     @Test
     void savesClaimAndRecordsMatchingEvent() {
         when(generator.next()).thenReturn("CLM-AAAA-BBBB");
 
-        SubmittedClaim result = service.submit(TestClaims.newClaim());
+        SubmittedClaim result = service.submit(TestClaims.newClaim(), null);
 
         assertThat(result.claimNumber()).isEqualTo("CLM-AAAA-BBBB");
         assertThat(result.status()).isEqualTo(ClaimStatus.SUBMITTED);
@@ -68,7 +72,7 @@ class ClaimSubmissionServiceTest {
         when(generator.next()).thenReturn("CLM-TAKE-NNNN", "CLM-FREE-NNNN");
         when(claimRepository.existsByClaimNumber("CLM-TAKE-NNNN")).thenReturn(true);
 
-        assertThat(service.submit(TestClaims.newClaim()).claimNumber()).isEqualTo("CLM-FREE-NNNN");
+        assertThat(service.submit(TestClaims.newClaim(), null).claimNumber()).isEqualTo("CLM-FREE-NNNN");
     }
 
     @Test
@@ -76,9 +80,77 @@ class ClaimSubmissionServiceTest {
         when(generator.next()).thenReturn("CLM-TAKE-NNNN");
         when(claimRepository.existsByClaimNumber(anyString())).thenReturn(true);
 
-        assertThatThrownBy(() -> service.submit(TestClaims.newClaim()))
+        assertThatThrownBy(() -> service.submit(TestClaims.newClaim(), null))
                 .isInstanceOf(ClaimNumberUnavailableException.class);
         verify(claimRepository, never()).save(any());
         verify(outboxWriter, never()).append(any(UUID.class), any());
+    }
+
+    @Test
+    void storesTheIdempotencyKeyOnANewClaim() {
+        when(generator.next()).thenReturn("CLM-AAAA-BBBB");
+
+        SubmittedClaim result = service.submit(TestClaims.newClaim(), "key-1");
+
+        assertThat(result.replayed()).isFalse();
+        ArgumentCaptor<Claim> claim = ArgumentCaptor.forClass(Claim.class);
+        verify(claimRepository).save(claim.capture());
+        assertThat(claim.getValue().getIdempotencyKey()).isEqualTo("key-1");
+    }
+
+    @Test
+    void aRepeatedKeyReturnsTheExistingClaimWithoutSavingOrQueueingAnotherEmail() {
+        Claim first = savedClaimWithKey("key-1");
+        when(claimRepository.findByIdempotencyKey("key-1")).thenReturn(Optional.of(first));
+
+        SubmittedClaim result = service.submit(TestClaims.newClaim(), "key-1");
+
+        assertThat(result.claimNumber()).isEqualTo(first.getClaimNumber());
+        assertThat(result.submittedAt()).isEqualTo(first.getCreatedAt());
+        assertThat(result.replayed()).isTrue();
+        verify(claimRepository, never()).save(any());
+        verify(outboxWriter, never()).append(any(UUID.class), any());
+    }
+
+    @Test
+    void aConcurrentRequestThatLosesTheRaceOnTheKeyReturnsTheWinnersClaim() {
+        TransactionOperations failingCommit = mock(TransactionOperations.class);
+        when(failingCommit.execute(any())).thenThrow(new DataIntegrityViolationException("uk_claim_idempotency_key"));
+        service = new ClaimSubmissionService(claimRepository, generator, outboxWriter, Clock.fixed(NOW, ZoneOffset.UTC), failingCommit);
+        Claim winner = savedClaimWithKey("key-1");
+        when(claimRepository.findByIdempotencyKey("key-1")).thenReturn(Optional.of(winner));
+
+        SubmittedClaim result = service.submit(TestClaims.newClaim(), "key-1");
+
+        assertThat(result.claimNumber()).isEqualTo(winner.getClaimNumber());
+        assertThat(result.replayed()).isTrue();
+    }
+
+    @Test
+    void anIntegrityErrorWithoutAKeyIsNotSwallowed() {
+        TransactionOperations failingCommit = mock(TransactionOperations.class);
+        when(failingCommit.execute(any())).thenThrow(new DataIntegrityViolationException("uk_claim_claim_number"));
+        service = new ClaimSubmissionService(claimRepository, generator, outboxWriter, Clock.fixed(NOW, ZoneOffset.UTC), failingCommit);
+
+        assertThatThrownBy(() -> service.submit(TestClaims.newClaim(), null))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    private static Claim savedClaimWithKey(String key) {
+        NewClaim c = TestClaims.newClaim();
+        return Claim.builder()
+                .id(UUID.randomUUID())
+                .claimNumber("CLM-FIRS-TONE")
+                .firstName(c.firstName())
+                .lastName(c.lastName())
+                .email(c.email())
+                .policyNumber(c.policyNumber())
+                .lossDate(c.lossDate())
+                .lossType(c.lossType())
+                .address(c.address())
+                .description(c.description())
+                .createdAt(NOW.minusSeconds(5))
+                .idempotencyKey(key)
+                .build();
     }
 }

@@ -6,7 +6,11 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
+import jakarta.persistence.PostLoad;
+import jakarta.persistence.PostPersist;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
+import org.springframework.data.domain.Persistable;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -21,7 +25,11 @@ import java.util.UUID;
  */
 @Entity
 @Table(name = "claim")
-public class Claim {
+public class Claim implements Persistable<UUID> {
+
+    // The id is assigned in code, so without this Spring Data would call merge() and SELECT before every INSERT.
+    @Transient
+    private boolean isNew = true;
 
     @Id
     private UUID id;
@@ -63,6 +71,9 @@ public class Claim {
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
+    @Column(name = "idempotency_key", unique = true, length = 64)
+    private String idempotencyKey;
+
     protected Claim() {
         // for JPA
     }
@@ -81,6 +92,7 @@ public class Claim {
         this.address = b.address;
         this.description = b.description;
         this.createdAt = b.createdAt;
+        this.idempotencyKey = b.idempotencyKey;
     }
 
     public static Builder builder() {
@@ -100,6 +112,7 @@ public class Claim {
     public Address getAddress() { return address; }
     public String getDescription() { return description; }
     public Instant getCreatedAt() { return createdAt; }
+    public String getIdempotencyKey() { return idempotencyKey; }
 
     public static final class Builder {
         private UUID id;
@@ -114,6 +127,7 @@ public class Claim {
         private Address address;
         private String description;
         private Instant createdAt;
+        private String idempotencyKey;
 
         public Builder id(UUID id) { this.id = id; return this; }
         public Builder claimNumber(String claimNumber) { this.claimNumber = claimNumber; return this; }
@@ -127,9 +141,21 @@ public class Claim {
         public Builder address(Address address) { this.address = address; return this; }
         public Builder description(String description) { this.description = description; return this; }
         public Builder createdAt(Instant createdAt) { this.createdAt = createdAt; return this; }
+        public Builder idempotencyKey(String idempotencyKey) { this.idempotencyKey = idempotencyKey; return this; }
 
         public Claim build() {
             return new Claim(this);
         }
+    }
+
+    @Override
+    public boolean isNew() {
+        return isNew;
+    }
+
+    @PostLoad
+    @PostPersist
+    void markNotNew() {
+        isNew = false;
     }
 }

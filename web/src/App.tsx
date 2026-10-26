@@ -4,7 +4,7 @@ import { Confirmation } from './claim/Confirmation'
 import type { SubmitResult } from './claim/api'
 import type { ClaimFormValues } from './claim/types'
 
-type Props = { submit?: (values: ClaimFormValues) => Promise<SubmitResult> }
+type Props = { submit?: (values: ClaimFormValues, idempotencyKey: string) => Promise<SubmitResult> }
 
 export function App({ submit }: Props) {
   const [accepted, setAccepted] = useState<{ claimNumber: string; email: string } | null>(null)
@@ -20,17 +20,19 @@ export function App({ submit }: Props) {
           <span className="brand-tag">Claims portal (assessment demo)</span>
         </div>
       </header>
-      <div className="page-banner">
-        <div className="page-banner__inner">
-          <h1>Make a Claim</h1>
+      <main id="main">
+        <div className="page-banner">
+          <div className="page-banner__inner">
+            <h1>Make a Claim</h1>
+          </div>
         </div>
-      </div>
-      <main id="main" className="container">
-        {accepted ? (
-          <Confirmation {...accepted} onStartOver={() => setAccepted(null)} />
-        ) : (
-          <ClaimForm submit={submit} onAccepted={(claimNumber, email) => setAccepted({ claimNumber, email })} />
-        )}
+        <div className="container">
+          {accepted ? (
+            <Confirmation {...accepted} onStartOver={() => setAccepted(null)} />
+          ) : (
+            <ClaimForm submit={submit} onAccepted={(claimNumber, email) => setAccepted({ claimNumber, email })} />
+          )}
+        </div>
       </main>
       <footer className="site-footer">
         <div className="site-footer__inner">Demo built for the Red River Mutual Software Developer III assessment.</div>

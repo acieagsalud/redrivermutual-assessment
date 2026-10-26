@@ -35,7 +35,7 @@ class OutboxRelayTest {
 
         assertThat(relay.publishPending()).isEqualTo(1);
 
-        verify(publisher).publish(event);
+        verify(publisher).publish(List.of(event));
         assertThat(event.isPublished()).isTrue();
         assertThat(event.getPublishedAt()).isEqualTo(NOW);
         assertThat(event.getAttempts()).isEqualTo(1);
@@ -47,7 +47,7 @@ class OutboxRelayTest {
     void leavesEventUnpublishedAndRecordsTheErrorWhenPublishFails() {
         OutboxEvent event = event();
         when(repository.lockUnpublished(50)).thenReturn(List.of(event));
-        doThrow(new AmqpException("Connection refused")).when(publisher).publish(event);
+        doThrow(new AmqpException("Connection refused")).when(publisher).publish(List.of(event));
 
         assertThat(relay.publishPending()).isZero();
 
@@ -66,16 +66,36 @@ class OutboxRelayTest {
     }
 
     @Test
-    void stopsTheBatchAtTheFirstFailureSoTheBrokerIsNotHammered() {
-        OutboxEvent first = event();
-        OutboxEvent second = event();
-        when(repository.lockUnpublished(50)).thenReturn(List.of(first, second));
-        doThrow(new AmqpException("Connection refused")).when(publisher).publish(first);
+    void publishesTheWholeBatchWithOneConfirm() {
+        List<OutboxEvent> batch = List.of(event(), event(), event());
+        when(repository.lockUnpublished(50)).thenReturn(batch);
 
-        relay.publishPending();
+        assertThat(relay.publishPending()).isEqualTo(3);
 
-        verify(publisher, never()).publish(second);
-        assertThat(second.getAttempts()).isZero();
+        verify(publisher).publish(batch);
+        assertThat(batch).allMatch(OutboxEvent::isPublished);
+        assertThat(meters.counter("outbox.published").count()).isEqualTo(3);
+    }
+
+    @Test
+    void aFailedConfirmLeavesTheWholeBatchForTheNextRun() {
+        List<OutboxEvent> batch = List.of(event(), event());
+        when(repository.lockUnpublished(50)).thenReturn(batch);
+        doThrow(new AmqpException("Confirm timed out")).when(publisher).publish(batch);
+
+        assertThat(relay.publishPending()).isZero();
+
+        // Some messages may have reached the broker; republishing them is safe because the consumer dedupes.
+        assertThat(batch).noneMatch(OutboxEvent::isPublished);
+        assertThat(batch).allMatch(e -> e.getAttempts() == 1);
+        assertThat(meters.counter("outbox.publish.failures").count()).isEqualTo(2);
+    }
+
+    @Test
+    void reportsWhetherABatchWasFull() {
+        assertThat(relay.wasFullBatch(50)).isTrue();
+        assertThat(relay.wasFullBatch(49)).isFalse();
+        assertThat(relay.wasFullBatch(0)).isFalse();
     }
 
     @Test

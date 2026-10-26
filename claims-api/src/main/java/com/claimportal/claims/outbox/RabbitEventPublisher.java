@@ -9,10 +9,14 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 /**
- * Publishes to RabbitMQ and blocks until the broker confirms the message is stored
+ * Publishes to RabbitMQ and blocks until the broker confirms the messages are stored
  * (publisher confirms). Without the confirm, "sent" would only mean "handed to the client library".
+ *
+ * <p>A batch is sent on one channel and confirmed with a single wait, so the round trip to the broker
+ * is paid once per batch rather than once per message.
  */
 @Component
 public class RabbitEventPublisher implements EventPublisher {
@@ -28,10 +32,14 @@ public class RabbitEventPublisher implements EventPublisher {
     }
 
     @Override
-    public void publish(OutboxEvent event) {
-        Message message = toMessage(event);
+    public void publish(List<OutboxEvent> events) {
+        if (events.isEmpty()) {
+            return;
+        }
         rabbitTemplate.invoke(ops -> {
-            ops.send(properties.exchange(), properties.routingKey(), message);
+            for (OutboxEvent event : events) {
+                ops.send(properties.exchange(), properties.routingKey(), toMessage(event));
+            }
             ops.waitForConfirmsOrDie(properties.confirmTimeout().toMillis());
             return null;
         });

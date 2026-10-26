@@ -6,7 +6,7 @@ import { DESCRIPTION_MAX, oneYearBefore, todayInWinnipeg, validate } from './val
 
 type Props = {
   onAccepted: (claimNumber: string, email: string) => void
-  submit?: (values: ClaimFormValues) => Promise<SubmitResult>
+  submit?: (values: ClaimFormValues, idempotencyKey: string) => Promise<SubmitResult>
 }
 
 const FIELD_LABELS: Record<FieldName, string> = {
@@ -32,6 +32,10 @@ const FIELD_ORDER: FieldName[] = [
   'lossDate', 'lossType', 'description',
 ]
 
+// randomUUID only exists on HTTPS or localhost; fall back to 128 random bits so plain-HTTP access still works.
+const newIdempotencyKey = () =>
+  crypto.randomUUID?.() ?? Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('')
+
 const fieldId = (name: FieldName) => `claim-${name.replace('.', '-')}`
 
 export function ClaimForm({ onAccepted, submit = submitClaim }: Props) {
@@ -40,6 +44,8 @@ export function ClaimForm({ onAccepted, submit = submitClaim }: Props) {
   const [failure, setFailure] = useState<{ message: string; reference?: string } | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const summaryRef = useRef<HTMLDivElement>(null)
+  // One key per claim being reported, reused on retries. "Report another claim" mounts a new form and a new key.
+  const [idempotencyKey] = useState(newIdempotencyKey)
 
   const today = todayInWinnipeg()
 
@@ -66,7 +72,7 @@ export function ClaimForm({ onAccepted, submit = submitClaim }: Props) {
     }
 
     setSubmitting(true)
-    const result = await submit(values)
+    const result = await submit(values, idempotencyKey)
     setSubmitting(false)
 
     if (result.kind === 'accepted') onAccepted(result.claimNumber, values.email.trim())
@@ -107,13 +113,6 @@ export function ClaimForm({ onAccepted, submit = submitClaim }: Props) {
               </li>
             ))}
           </ul>
-        </div>
-      )}
-
-      {failure && (
-        <div className="banner banner--error" role="alert">
-          <p>{failure.message}</p>
-          {failure.reference && <p className="reference">Reference: {failure.reference}</p>}
         </div>
       )}
 
@@ -182,10 +181,22 @@ export function ClaimForm({ onAccepted, submit = submitClaim }: Props) {
             <textarea {...aria} name="description" rows={6} maxLength={DESCRIPTION_MAX} value={values.description} onChange={update('description')} />
           )}
         </Field>
-        <p className="counter" aria-live="polite">
+        <p className="counter" aria-hidden="true">
           {values.description.length} / {DESCRIPTION_MAX}
         </p>
+        {/* Announced only near the limit; announcing every keystroke would drown out what the user types. */}
+        <p className="visually-hidden" aria-live="polite">
+          {DESCRIPTION_MAX - values.description.length <= 100 ? `${DESCRIPTION_MAX - values.description.length} characters left` : ''}
+        </p>
       </fieldset>
+
+      {/* Next to the button, where the customer is looking when the submit fails, so a retry is one click away. */}
+      {failure && (
+        <div className="banner banner--error" role="alert">
+          <p>{failure.message}</p>
+          {failure.reference && <p className="reference">Reference: {failure.reference}</p>}
+        </div>
+      )}
 
       <button type="submit" className="primary" disabled={submitting} aria-disabled={submitting}>
         {submitting ? 'Submitting…' : 'Submit Claim'}

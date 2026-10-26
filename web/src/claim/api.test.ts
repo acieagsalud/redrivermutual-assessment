@@ -10,11 +10,12 @@ describe('submitClaim', () => {
     const fetchImpl = respond(201, { claimNumber: 'CLM-7K4Q-9XHM', status: 'SUBMITTED' })
     const values = { ...EMPTY_FORM, policyNumber: 'ho-12345678', 'address.line1': '123 Main St', phone: ' ' }
 
-    const result = await submitClaim(values, fetchImpl)
+    const result = await submitClaim(values, 'key-1', fetchImpl)
 
     expect(result).toEqual({ kind: 'accepted', claimNumber: 'CLM-7K4Q-9XHM' })
     const [url, init] = fetchImpl.mock.calls[0]
     expect(url).toBe('/api/v1/claims')
+    expect(init.headers['Idempotency-Key']).toBe('key-1')
     const body = JSON.parse(init.body)
     expect(body.address.line1).toBe('123 Main St')
     expect(body.policyNumber).toBe('HO-12345678')
@@ -24,20 +25,26 @@ describe('submitClaim', () => {
   it('maps 400 problem details to field errors', async () => {
     const fetchImpl = respond(400, { errors: [{ field: 'email', message: 'must be a well-formed email address' }] })
 
-    expect(await submitClaim(EMPTY_FORM, fetchImpl)).toEqual({
+    expect(await submitClaim(EMPTY_FORM, 'key-1', fetchImpl)).toEqual({
       kind: 'invalid',
       fieldErrors: { email: 'must be a well-formed email address' },
     })
   })
 
   it('returns a generic failure with the correlation id on 500', async () => {
-    const result = await submitClaim(EMPTY_FORM, respond(500, { correlationId: 'abc-123' }))
+    const result = await submitClaim(EMPTY_FORM, 'key-1', respond(500, { correlationId: 'abc-123' }))
 
     expect(result).toMatchObject({ kind: 'failed', reference: 'abc-123' })
   })
 
+  it('tells the customer to wait when submissions are rate limited', async () => {
+    const result = await submitClaim(EMPTY_FORM, 'key-1', vi.fn().mockResolvedValue(new Response('<html>429</html>', { status: 429 })))
+
+    expect(result).toMatchObject({ kind: 'failed', message: expect.stringContaining('wait a minute') })
+  })
+
   it('returns a generic failure when the network is down', async () => {
-    const result = await submitClaim(EMPTY_FORM, vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
+    const result = await submitClaim(EMPTY_FORM, 'key-1', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
 
     expect(result.kind).toBe('failed')
   })
