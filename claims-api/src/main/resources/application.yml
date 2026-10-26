@@ -10,6 +10,10 @@ spring:
     open-in-view: false
     hibernate:
       ddl-auto: validate
+    properties:
+      # Sends the relay's per-event UPDATEs as one JDBC batch instead of one round trip each.
+      hibernate.jdbc.batch_size: 50
+      hibernate.order_updates: true
   flyway:
     enabled: true
   rabbitmq:

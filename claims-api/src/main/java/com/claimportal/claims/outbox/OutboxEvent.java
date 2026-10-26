@@ -3,7 +3,11 @@ package com.claimportal.claims.outbox;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
+import jakarta.persistence.PostLoad;
+import jakarta.persistence.PostPersist;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
+import org.springframework.data.domain.Persistable;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
@@ -13,7 +17,11 @@ import java.util.UUID;
 /** A domain event waiting to be (or already) published to the message broker. Its id is the event id. */
 @Entity
 @Table(name = "outbox_event")
-public class OutboxEvent {
+public class OutboxEvent implements Persistable<UUID> {
+
+    // The id is assigned in code, so without this Spring Data would call merge() and SELECT before every INSERT.
+    @Transient
+    private boolean isNew = true;
 
     private static final int MAX_ERROR_LENGTH = 1000;
 
@@ -82,4 +90,15 @@ public class OutboxEvent {
     public Instant getPublishedAt() { return publishedAt; }
     public int getAttempts() { return attempts; }
     public String getLastError() { return lastError; }
+
+    @Override
+    public boolean isNew() {
+        return isNew;
+    }
+
+    @PostLoad
+    @PostPersist
+    void markNotNew() {
+        isNew = false;
+    }
 }
