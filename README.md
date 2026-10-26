@@ -290,6 +290,23 @@ To read the raw endpoints: the claims API's is published on port 8081. The notif
 - **Least privilege:** each service has its own database user and database. The JVM services run as a non-root user, and nginx uses the unprivileged image.
 - **Monitoring endpoints:** `/actuator/prometheus`, Prometheus and Grafana's anonymous read-only view have no authentication. That suits a local demo only; production would serve actuator on a separate management port and put the monitoring tools behind single sign-on.
 
+### OWASP Top 10 (2025)
+
+Reviewed against the [OWASP Top 10 2025](https://top10.owasp.org/2025/).
+
+| Category | How it is handled | Left for production |
+| --- | --- | --- |
+| A01 Broken Access Control | The only public operation is submitting a claim; nothing can be read back except your own claim number. nginx forwards only `/api/`, so actuator is not reachable through it. Admin and monitoring tools bind to `127.0.0.1` | Authentication before any read endpoint (claim status) is added |
+| A02 Security Misconfiguration | Security headers (CSP, `X-Frame-Options`, `nosniff`, `Referrer-Policy`, `Permissions-Policy`), nginx version hidden, no stack traces in errors, actuator limited to `health`, `info` and `prometheus` with health details hidden, non-root containers, credentials without defaults | HSTS once TLS is in place; actuator on a separate management port |
+| A03 Software Supply Chain Failures | Lockfiles committed and installed with `npm ci`; Java versions managed by the Spring Boot BOM; CI fails on high or critical npm advisories (`npm audit`); GitHub Actions pinned to commit SHAs; base images pinned to versions | Maven dependency scanning (OWASP Dependency-Check or Dependabot) and image scanning (Trivy); pinning images by digest |
+| A04 Cryptographic Failures | No passwords or card data stored. Claim numbers come from `SecureRandom`. Resend SMTP uses TLS on port 465 with server identity checked | TLS for every hop, encryption at rest for claim data |
+| A05 Injection | JPA and `JdbcTemplate` with bound parameters only; Thymeleaf escapes customer text in the email (tested with `<script>`); correlation id and idempotency key restricted to `[A-Za-z0-9-]{1,64}` to stop log injection; the email subject carries only the claim number | None at this scope |
+| A06 Insecure Design | Transactional outbox, idempotent consumer and idempotent submission prevent lost or duplicated claims and emails; minimal personal information on the broker; per-IP rate limit on submissions | Policy-holder verification and CAPTCHA, since anyone can file against any policy number |
+| A07 Authentication Failures | No customer authentication by design (see Assumptions). Service accounts for PostgreSQL, RabbitMQ and Grafana use passwords from `.env`, never defaults | Customer identity verification; single sign-on for the admin tools |
+| A08 Software or Data Integrity Failures | Events are plain JSON records, with no polymorphic deserialization; incomplete or unreadable events go to the DLQ; producer and consumer contract tests pin the event shape | Signed events, if events ever cross a trust boundary |
+| A09 Security Logging and Alerting Failures | Correlation id on every log line; rejected submissions are logged with field names only; nginx logs rate-limited requests; Prometheus alert rules for a service down, an outbox backlog, publish failures, API 5xx errors and an unusual submission rate (http://localhost:9090/alerts) | Alertmanager routing to on-call; central log storage |
+| A10 Mishandling of Exceptional Conditions | One exception handler returns problem details and fails closed; timeouts on SMTP (5 s), the broker confirm (5 s) and the nginx proxy (15 s); failed publishes and sends are retried, never dropped, and a failed send leaves no "processed" mark | A DLQ replay tool |
+
 ---
 
 ## Assumptions

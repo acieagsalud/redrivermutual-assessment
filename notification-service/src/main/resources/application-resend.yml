@@ -9,6 +9,8 @@ spring:
     properties:
       "[mail.smtp.auth]": true
       "[mail.smtp.ssl.enable]": true
+      # Reject a certificate that doesn't match smtp.resend.com, so the API key can't go to an impostor.
+      "[mail.smtp.ssl.checkserveridentity]": true
 
 notification:
   mail:

@@ -37,6 +37,8 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 .map(e -> new FieldError(e.getField(), e.getDefaultMessage()))
                 .sorted(Comparator.comparing(FieldError::field))
                 .toList();
+        // Field names only: the rejected values may be personal information. A spike of these is worth seeing.
+        log.info("Claim rejected by validation fields={}", errors.stream().map(FieldError::field).distinct().toList());
         ProblemDetail problem = problem(HttpStatus.BAD_REQUEST, "Validation failed", "One or more fields are invalid.");
         problem.setProperty("errors", errors);
         return ResponseEntity.badRequest().body(problem);
@@ -45,12 +47,14 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     @Override
     protected ResponseEntity<Object> handleHttpMessageNotReadable(HttpMessageNotReadableException ex, HttpHeaders headers,
                                                                   HttpStatusCode status, WebRequest request) {
+        log.info("Claim rejected: request body could not be read");
         return ResponseEntity.badRequest()
                 .body(problem(HttpStatus.BAD_REQUEST, "Malformed request", "The request body could not be read."));
     }
 
     @ExceptionHandler(InvalidIdempotencyKeyException.class)
     public ResponseEntity<ProblemDetail> handleInvalidIdempotencyKey(InvalidIdempotencyKeyException ex) {
+        log.info("Claim rejected: malformed Idempotency-Key header");
         return ResponseEntity.badRequest()
                 .body(problem(HttpStatus.BAD_REQUEST, "Invalid Idempotency-Key", ex.getMessage()));
     }
