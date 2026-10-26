@@ -19,21 +19,22 @@ groups:
         annotations:
           summary: "{{ $value }} claim events waiting for RabbitMQ; confirmation emails are delayed"
 
+      # A 1-minute rate, so the alert clears about a minute after the broker recovers.
       - alert: OutboxPublishFailing
-        expr: increase(outbox_publish_failures_total[5m]) > 0
-        for: 5m
+        expr: rate(outbox_publish_failures_total[1m]) > 0
+        for: 2m
         labels:
           severity: warning
         annotations:
-          summary: "The outbox relay has failed to publish for 5 minutes; check RabbitMQ"
+          summary: "The outbox relay has been failing to publish for 2 minutes; check RabbitMQ"
 
       - alert: ApiServerErrors
-        expr: sum(rate(http_server_requests_seconds_count{job="claims-api", uri="/api/v1/claims", status=~"5.."}[5m])) > 0
-        for: 5m
+        expr: sum(rate(http_server_requests_seconds_count{job="claims-api", uri="/api/v1/claims", status=~"5.."}[1m])) > 0
+        for: 2m
         labels:
           severity: warning
         annotations:
-          summary: "Claim submissions are returning 5xx errors"
+          summary: "Claim submissions have been returning 5xx errors for 2 minutes"
 
       - alert: UnusualSubmissionRate
         expr: sum(rate(http_server_requests_seconds_count{job="claims-api", uri="/api/v1/claims"}[5m])) * 60 > 30
