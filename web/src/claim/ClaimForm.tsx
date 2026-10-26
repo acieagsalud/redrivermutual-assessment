@@ -188,8 +188,12 @@ export function ClaimForm({ onAccepted, submit = submitClaim }: Props) {
             <textarea {...aria} name="description" rows={6} maxLength={DESCRIPTION_MAX} value={values.description} onChange={update('description')} />
           )}
         </Field>
-        <p className="counter" aria-live="polite">
+        <p className="counter" aria-hidden="true">
           {values.description.length} / {DESCRIPTION_MAX}
+        </p>
+        {/* Announced only near the limit; announcing every keystroke would drown out what the user types. */}
+        <p className="visually-hidden" aria-live="polite">
+          {DESCRIPTION_MAX - values.description.length <= 100 ? `${DESCRIPTION_MAX - values.description.length} characters left` : ''}
         </p>
       </fieldset>
 

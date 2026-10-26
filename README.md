@@ -249,7 +249,7 @@ cd e2e && npm ci && npx playwright install chromium && npx playwright test
 | claims-api | 46 | Claim and outbox commit or roll back together, against real PostgreSQL; relay publishes to real RabbitMQ with the event id as message id; batched publish and backlog draining; a retried submission with the same idempotency key creates one claim and one event; validation and error shape; claim number format and collision retry; outbox cleanup |
 | notification-service | 20 | Same event delivered twice sends one email (real RabbitMQ, PostgreSQL and Mailpit); SMTP outage leads to DLQ without marking processed; malformed message goes to the DLQ unretried; HTML escaping; idempotency headers; processed-event cleanup |
 | web | 27 | Field rules mirror the server; error summary and accessible descriptions; required fields announced to screen readers; server errors mapped to fields; confirmation shows the claim number; a retry reuses the idempotency key; a rate-limited submission tells the customer to wait |
-| e2e (Playwright) | 6 | Real browser against the full Compose stack: submit the form, see the claim number, and find exactly one email with that number in Mailpit; incomplete form stopped in the browser; API rejects invalid data on its own; Prometheus scrapes both services, every Grafana panel query returns data, and the dashboard is provisioned |
+| e2e (Playwright) | 8 | Real browser against the full Compose stack: submit the form, see the claim number, and find exactly one email with that number in Mailpit; incomplete form stopped in the browser; API rejects invalid data on its own; Prometheus scrapes both services, every Grafana panel query returns data, and the dashboard is provisioned; axe finds no WCAG 2.2 AA failures on the form, its error state or the confirmation, and the page reflows at 320 px |
 
 The most important tests to discuss:
 
@@ -289,6 +289,19 @@ To read the raw endpoints: the claims API's is published on port 8081. The notif
 - **Network exposure:** every host port in Compose binds to `127.0.0.1`, so Mailpit (which shows customer emails), the API, the RabbitMQ console and the monitoring tools can't be reached from other machines.
 - **Least privilege:** each service has its own database user and database. The JVM services run as a non-root user, and nginx uses the unprivileged image.
 - **Monitoring endpoints:** `/actuator/prometheus`, Prometheus and Grafana's anonymous read-only view have no authentication. That suits a local demo only; production would serve actuator on a separate management port and put the monitoring tools behind single sign-on.
+
+## Accessibility
+
+The target is **WCAG 2.2 Level AA**, the current W3C Recommendation. It includes 2.1 AA, which is what Canadian standards reference. The form follows the patterns of the GOV.UK and Canada.ca design systems:
+
+- Every field has a visible label, and hints and errors are tied to their field with `aria-describedby`; invalid fields set `aria-invalid`.
+- On submit, an error summary takes focus and links to each field. After a successful submit, focus moves to the confirmation heading.
+- `autocomplete` on every personal field (1.3.5), a skip link, landmarks for header, main and footer, and `lang="en"`.
+- A dark focus ring offset from the control, at 16:1 contrast (2.4.7, 1.4.11); text contrast at least 5.8:1.
+- Targets of at least 24 by 24 px, including the error summary links (2.5.8); nothing sticky that could cover the focused field (2.4.11).
+- Reflows at 320 px without horizontal scrolling (1.4.10). The character counter is announced only in the last 100 characters, so screen readers aren't interrupted on every keystroke.
+
+Automated checks (axe in the e2e suite) find roughly a third of WCAG issues. A full audit would add a screen reader pass (NVDA and VoiceOver) and testing with real users.
 
 ### OWASP Top 10 (2025)
 

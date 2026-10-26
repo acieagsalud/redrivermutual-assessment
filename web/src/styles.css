@@ -14,7 +14,8 @@
   --surface: #ffffff;
   --error: #b42318;
   --error-bg: #fef3f2;
-  --focus: #f5a524;
+  /* Dark ring offset onto the page background: 16:1 on white, so it passes WCAG 1.4.11 (3:1). */
+  --focus: #231f20;
   --sans: 'Helvetica Neue', Helvetica, Arial, sans-serif;
   --serif: 'Faustina', Georgia, 'Times New Roman', serif;
   font-family: var(--sans);
@@ -94,7 +95,7 @@ textarea { resize: vertical; }
 
 input:focus, select:focus, textarea:focus, button:focus, a:focus, [tabindex='-1']:focus {
   outline: 3px solid var(--focus);
-  outline-offset: 1px;
+  outline-offset: 2px;
 }
 
 .field--error input, .field--error select, .field--error textarea { border: 2px solid var(--error); }
@@ -109,6 +110,8 @@ input:focus, select:focus, textarea:focus, button:focus, a:focus, [tabindex='-1'
 .error-summary h2 { font-family: var(--sans); font-weight: 700; color: var(--error); font-size: 1.1rem; margin: 0 0 4px; }
 .error-summary ul { margin: 0; padding-left: 20px; }
 .error-summary a { color: var(--error); }
+/* WCAG 2.5.8: each link in the list is at least 24px tall, so adjacent targets never crowd each other. */
+.error-summary li a { display: inline-block; min-height: 24px; padding: 2px 0; }
 
 .banner { padding: 14px 18px; margin: 20px 0; }
 .banner p { margin: 0; }
